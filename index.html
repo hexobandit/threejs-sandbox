@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Racing Sandbox — Three.js Mockups</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Courier New', monospace;
+            background: #1a1a2e;
+            color: #e0e0e0;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 2rem 1rem;
+        }
+        h1 { font-size: 1.5rem; color: #00ff88; text-transform: uppercase; letter-spacing: 0.2em; margin-bottom: 0.3rem; }
+        .sub { font-size: 0.75rem; color: #555; margin-bottom: 0.3rem; }
+        .tech { font-size: 0.65rem; color: #333; margin-bottom: 2rem; }
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+            gap: 1rem; width: 100%; max-width: 900px;
+        }
+        a.card {
+            display: block; background: #16213e; border: 1px solid #0f3460;
+            border-radius: 8px; padding: 1.2rem; text-decoration: none;
+            color: inherit; transition: all 0.2s;
+        }
+        a.card:hover, a.card:active {
+            border-color: #00ff88; transform: translateY(-2px);
+            box-shadow: 0 4px 20px rgba(0,255,136,0.15);
+        }
+        .card .num { font-size: 0.65rem; color: #0f3460; text-transform: uppercase; letter-spacing: 0.1em; }
+        .card h2 { font-size: 1rem; color: #00ff88; margin: 0.3rem 0; }
+        .card p { font-size: 0.75rem; color: #777; line-height: 1.5; }
+        .note { margin-top: 2rem; font-size: 0.65rem; color: #333; text-align: center; max-width: 500px; line-height: 1.6; }
+        .note code { color: #00ff88; }
+    </style>
+</head>
+<body>
+    <h1>Game Sandbox</h1>
+    <p class="sub">Three.js &amp; Canvas Visual Mockups</p>
+    <p class="tech">Orthographic · WebGL · Mobile-first</p>
+    <div class="grid">
+        <a class="card" href="mockups/01-arena.html">
+            <span class="num">Mockup 01</span>
+            <h2>Isometric Arena</h2>
+            <p>45° orthographic camera, blocky track with curbs, buildings, flag zone</p>
+        </a>
+        <a class="card" href="mockups/02-car-fleet.html">
+            <span class="num">Mockup 02</span>
+            <h2>Car Fleet</h2>
+            <p>30 instanced blocky cars racing in two teams — mobile perf test</p>
+        </a>
+        <a class="card" href="mockups/03-particles.html">
+            <span class="num">Mockup 03</span>
+            <h2>Particles &amp; Skids</h2>
+            <p>Tire smoke, skid trails, dust — particle budget on mobile</p>
+        </a>
+        <a class="card" href="mockups/04-lighting.html">
+            <span class="num">Mockup 04</span>
+            <h2>Lighting &amp; Mood</h2>
+            <p>Sunset shadows, fog, atmosphere — how cinematic can mobile get?</p>
+        </a>
+        <a class="card" href="mockups/05-swarm.html">
+            <span class="num">Mockup 05</span>
+            <h2>Swarm Formations</h2>
+            <p>Attack/defend formations around a flag — strategic readability</p>
+        </a>
+        <a class="card" href="mockups/06-strategy-3d.html" style="border-color:#00ff8844">
+            <span class="num">Mockup 06</span>
+            <h2>Strategy 3D</h2>
+            <p>Isometric hex grid command post — holographic defense terminal, radar sweep</p>
+        </a>
+        <a class="card" href="mockups/07-strategy-2d.html" style="border-color:#00ff8844">
+            <span class="num">Mockup 07</span>
+            <h2>Strategy 2D</h2>
+            <p>Top-down tactical hex map — unit paths, fog of war, attack vectors</p>
+        </a>
+        <a class="card" href="mockups/08-strategy-classic.html" style="border-color:#00ff8844">
+            <span class="num">Mockup 08</span>
+            <h2>Classic 2D</h2>
+            <p>Pure Canvas retro terminal — CRT scanlines, ASCII roster, DOS war game vibe</p>
+        </a>
+        <a class="card" href="mockups/09-starcraft-hex.html" style="border-color:#00ddff44">
+            <span class="num">Mockup 09</span>
+            <h2 style="color:#00ddff">Starcraft Hex</h2>
+            <p>RTS on hex grid — mineral patches, zerg rush, base building, fog of war</p>
+        </a>
+        <a class="card" href="mockups/10-pacman-hex.html" style="border-color:#ffcc0044">
+            <span class="num">Mockup 10</span>
+            <h2 style="color:#ffcc00">Pacman Hex</h2>
+            <p>Classic arcade reimagined — hex maze, ghosts, power pellets, chomp chomp</p>
+        </a>
+        <a class="card" href="mockups/11-2050-cyber.html" style="border-color:#ff00ff44">
+            <span class="num">Mockup 11</span>
+            <h2 style="color:#ff00ff">2050 Cyber</h2>
+            <p>Cyberpunk hex warfare — data streams, wireframe units, EMP pulses, digital rain</p>
+        </a>
+        <a class="card" href="mockups/11b-2050-cyber-v2.html" style="border-color:#ff00ff44">
+            <span class="num">Mockup 11b</span>
+            <h2 style="color:#ff00ff">2050 Cyber v2</h2>
+            <p>Aerial dominance — carrier ships, drone contrails, multi-altitude dogfights, orbital strikes</p>
+        </a>
+        <a class="card" href="mockups/11c-2050-cyber-v3.html" style="border-color:#ff00ff44">
+            <span class="num">Mockup 11c</span>
+            <h2 style="color:#ff00ff">2050 Cyber v3</h2>
+            <p>Full spectrum warfare — ground + air + orbital, dreadnought beams, warp portals, everything</p>
+        </a>
+        <a class="card" href="mockups/12-prince-of-persia.html" style="border-color:#ffaa0044">
+            <span class="num">Mockup 12</span>
+            <h2 style="color:#ffaa00">Prince of Persia 2050</h2>
+            <p>Classic platformer × cyberpunk — multiplayer co-op, traps, swords, neon dungeon</p>
+        </a>
+        <a class="card" href="mockups/13-mini-motorways.html" style="border-color:#27ae6044">
+            <span class="num">Mockup 13</span>
+            <h2 style="color:#27ae60">Mini Motorways</h2>
+            <p>Zen route builder on hex grid — pastel roads, flowing cars, satisfying traffic</p>
+        </a>
+        <a class="card" href="mockups/14-tron-hex.html" style="border-color:#00ffff44">
+            <span class="num">Mockup 14</span>
+            <h2 style="color:#00ffff">Tron Light Cycles</h2>
+            <p>4-player light cycle battle on hex grid — neon trails, derez effects, pure Tron</p>
+        </a>
+        <a class="card" href="mockups/15-bomberman-hex.html" style="border-color:#ee444444">
+            <span class="num">Mockup 15</span>
+            <h2 style="color:#ee4444">Bomberman Hex</h2>
+            <p>4-player hex Bomberman — 6-direction explosions, power-ups, blocky fun</p>
+        </a>
+        <a class="card" href="mockups/16-xwing-chase.html" style="border-color:#44ff4444">
+            <span class="num">Mockup 16</span>
+            <h2 style="color:#44ff44">X-Wing Chase</h2>
+            <p>Third-person space combat — laser fire, asteroids, wingman, engine trails</p>
+        </a>
+        <a class="card" href="mockups/17-hex-flight.html" style="border-color:#44ff4444">
+            <span class="num">Mockup 17</span>
+            <h2 style="color:#44ff44">Hex Flight</h2>
+            <p>Air combat over hex battlefield — strafing runs, dogfights, anti-air flak</p>
+        </a>
+        <a class="card" href="mockups/18-canyon-run.html" style="border-color:#00ffff44">
+            <span class="num">Mockup 18</span>
+            <h2 style="color:#00ffff">Canyon Run</h2>
+            <p>High-speed trench run — speed lines, obstacles, pursuit, pure velocity</p>
+        </a>
+        <a class="card" href="mockups/19-flight-arena.html" style="border-color:#ffcc0044">
+            <span class="num">Mockup 19</span>
+            <h2 style="color:#ffcc00">Flight Arena</h2>
+            <p>4-player multiplayer dogfight — contrails, hit detection, scoreboard</p>
+        </a>
+        <a class="card" href="mockups/20-carrier-battle.html" style="border-color:#ff444444">
+            <span class="num">Mockup 20</span>
+            <h2 style="color:#ff4444">Carrier Battle</h2>
+            <p>Capital ship warfare — fighter swarms, broadside fire, torpedoes, massive scale</p>
+        </a>
+    </div>
+    <p class="note">
+        Open any mockup directly in your browser.<br>
+        If imports fail (Firefox), run <code>npx serve .</code> as fallback.
+    </p>
+</body>
+</html>

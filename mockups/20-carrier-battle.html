@@ -1,0 +1,1124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>20 / Carrier Battle</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #000003; overflow: hidden; font-family: 'Courier New', monospace; }
+canvas { display: block; }
+#ui {
+    position: fixed; top: 16px; left: 20px; z-index: 10;
+    color: #99aacc; pointer-events: none;
+}
+#ui h1 {
+    font-size: 18px; font-weight: 700; letter-spacing: 3px;
+    color: #ddeeff; margin-bottom: 4px;
+}
+#ui p { font-size: 10px; color: #667799; }
+#stats {
+    margin-top: 8px; font-size: 10px; color: #556677;
+}
+#back {
+    position: fixed; top: 18px; right: 20px; z-index: 10;
+    color: #556677; text-decoration: none; font-family: 'Courier New', monospace;
+    font-size: 12px;
+}
+#back:hover { color: #aabbdd; }
+#status {
+    position: fixed; bottom: 12px; left: 0; right: 0; text-align: center;
+    font-family: 'Courier New', monospace; font-size: 11px; z-index: 10;
+    pointer-events: none;
+}
+#feed {
+    position: fixed; bottom: 40px; left: 12px;
+    font-family: 'Courier New', monospace; font-size: 9px;
+    color: #888; z-index: 10; pointer-events: none; line-height: 1.6;
+}
+</style>
+<script type="importmap">
+{
+    "imports": {
+        "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+    }
+}
+</script>
+</head>
+<body>
+
+<div id="ui">
+    <h1>20 / CARRIER BATTLE</h1>
+    <p>Capital ship warfare · Fighter swarms · Broadside exchanges · Torpedoes · Scale</p>
+    <div id="stats">-- FPS</div>
+</div>
+<a id="back" href="../index.html">&larr; back</a>
+<div id="status">
+    <span style="color:#4488ff">USS AURORA &mdash; SHIELDS 62%</span>
+    &nbsp;&nbsp;&#9876;&nbsp;&nbsp;
+    <span style="color:#ff4444">IRN DEVASTATOR &mdash; SHIELDS 34%</span>
+</div>
+<div id="feed">
+    [12:04] Torpedo impact on DEVASTATOR &mdash; hull breach<br>
+    [12:03] AURORA fighter wing engaging<br>
+    [12:01] DEVASTATOR broadside &mdash; shields holding
+</div>
+
+<script type="module">
+import * as THREE from 'three';
+
+// ── Renderer ──
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 0.9;
+document.body.appendChild(renderer.domElement);
+
+// ── Scene ──
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x000003);
+scene.fog = new THREE.FogExp2(0x000003, 0.004);
+
+// ── Camera ──
+const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 500);
+camera.position.set(30, 10, 30);
+
+// ── Lighting ──
+const ambient = new THREE.AmbientLight(0x111122, 0.15);
+scene.add(ambient);
+
+const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+dirLight.position.set(40, 20, -10);
+scene.add(dirLight);
+
+// subtle fill from below
+const fillLight = new THREE.DirectionalLight(0x223355, 0.15);
+fillLight.position.set(-20, -10, 5);
+scene.add(fillLight);
+
+// ═══════════════════════════════════════════
+// STARS
+// ═══════════════════════════════════════════
+function createStars() {
+    const count = 1500;
+    const positions = new Float32Array(count * 3);
+    for (let i = 0; i < count; i++) {
+        const r = 150 + Math.random() * 100;
+        const theta = Math.random() * Math.PI * 2;
+        const phi = Math.acos(2 * Math.random() - 1);
+        positions[i * 3] = r * Math.sin(phi) * Math.cos(theta);
+        positions[i * 3 + 1] = r * Math.sin(phi) * Math.sin(theta);
+        positions[i * 3 + 2] = r * Math.cos(phi);
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    const mat = new THREE.PointsMaterial({ color: 0xccccdd, size: 0.3, sizeAttenuation: true });
+    scene.add(new THREE.Points(geo, mat));
+}
+createStars();
+
+// ── Nebula hint ──
+const nebGeo = new THREE.SphereGeometry(60, 24, 24);
+const nebMat = new THREE.MeshBasicMaterial({
+    color: 0x332266, transparent: true, opacity: 0.06, side: THREE.BackSide
+});
+const nebula = new THREE.Mesh(nebGeo, nebMat);
+nebula.position.set(-40, 20, -80);
+scene.add(nebula);
+
+const nebGeo2 = new THREE.SphereGeometry(45, 24, 24);
+const nebMat2 = new THREE.MeshBasicMaterial({
+    color: 0x223366, transparent: true, opacity: 0.04, side: THREE.BackSide
+});
+const nebula2 = new THREE.Mesh(nebGeo2, nebMat2);
+nebula2.position.set(30, -10, -60);
+scene.add(nebula2);
+
+// ═══════════════════════════════════════════
+// HELPER: build a box mesh
+// ═══════════════════════════════════════════
+function makeBox(w, h, d, color, opts = {}) {
+    const geo = new THREE.BoxGeometry(w, h, d);
+    const mat = new THREE.MeshStandardMaterial({
+        color, roughness: opts.roughness ?? 0.35, metalness: opts.metalness ?? 0.7,
+        emissive: opts.emissive ?? 0x000000, emissiveIntensity: opts.emissiveIntensity ?? 0
+    });
+    const mesh = new THREE.Mesh(geo, mat);
+    if (opts.wireframe) {
+        const wire = new THREE.LineSegments(
+            new THREE.EdgesGeometry(geo),
+            new THREE.LineBasicMaterial({ color: opts.wireColor ?? 0x88aacc, transparent: true, opacity: 0.25 })
+        );
+        mesh.add(wire);
+    }
+    return mesh;
+}
+
+// ═══════════════════════════════════════════
+// PLAYER CARRIER — USS AURORA
+// ═══════════════════════════════════════════
+const playerCarrier = new THREE.Group();
+
+// Main hull
+const hull = makeBox(12, 2, 4, 0x556677, { wireframe: true, wireColor: 0x6688aa });
+playerCarrier.add(hull);
+
+// Bridge tower
+const bridge = makeBox(2, 3, 2, 0x667788, { wireframe: true, wireColor: 0x7799bb });
+bridge.position.set(-2, 2.5, 0);
+playerCarrier.add(bridge);
+
+// Bridge antenna
+const antenna1 = makeBox(0.1, 2, 0.1, 0x8899aa);
+antenna1.position.set(-2, 4.5, 0);
+playerCarrier.add(antenna1);
+const antenna2 = makeBox(0.1, 1.2, 0.1, 0x8899aa);
+antenna2.position.set(-2.6, 4, 0.5);
+playerCarrier.add(antenna2);
+
+// Antenna arrays on hull
+const antArray1 = makeBox(0.08, 0.08, 1.8, 0x8899aa);
+antArray1.position.set(3, 1.1, 0);
+playerCarrier.add(antArray1);
+const antArray2 = makeBox(0.08, 0.08, 1.5, 0x8899aa);
+antArray2.position.set(4, 0.8, 0.3);
+playerCarrier.add(antArray2);
+
+// Flight deck (underside)
+const flightDeck = makeBox(8, 0.1, 3, 0x667788, {
+    emissive: 0x224466, emissiveIntensity: 0.4
+});
+flightDeck.position.set(1, -1.1, 0);
+playerCarrier.add(flightDeck);
+
+// Flight deck guide lights
+for (let i = 0; i < 6; i++) {
+    const light = makeBox(0.15, 0.05, 0.15, 0x44aaff, {
+        emissive: 0x44aaff, emissiveIntensity: 1.5
+    });
+    light.position.set(-2 + i * 1.5, -1.2, 1.2);
+    playerCarrier.add(light);
+    const light2 = light.clone();
+    light2.position.set(-2 + i * 1.5, -1.2, -1.2);
+    playerCarrier.add(light2);
+}
+
+// Engine block
+const engineBlock = makeBox(3, 2, 4, 0x445566, { wireframe: true, wireColor: 0x556688 });
+engineBlock.position.set(-7.5, 0, 0);
+playerCarrier.add(engineBlock);
+
+// Engine circles (4 large cyan glowing rings)
+for (let ey = 0; ey < 2; ey++) {
+    for (let ez = 0; ez < 2; ez++) {
+        const ring = new THREE.Mesh(
+            new THREE.RingGeometry(0.3, 0.55, 16),
+            new THREE.MeshBasicMaterial({ color: 0x44ddff, side: THREE.DoubleSide })
+        );
+        ring.position.set(-9.05, -0.4 + ey * 0.9, -0.7 + ez * 1.4);
+        ring.rotation.y = Math.PI / 2;
+        playerCarrier.add(ring);
+
+        // Engine glow core
+        const glow = new THREE.Mesh(
+            new THREE.CircleGeometry(0.3, 12),
+            new THREE.MeshBasicMaterial({ color: 0x88eeff, transparent: true, opacity: 0.5, side: THREE.DoubleSide })
+        );
+        glow.position.copy(ring.position);
+        glow.position.x -= 0.01;
+        glow.rotation.y = Math.PI / 2;
+        playerCarrier.add(glow);
+    }
+}
+
+// Engine point light
+const engineLight = new THREE.PointLight(0x44ddff, 2, 8);
+engineLight.position.set(-9.5, 0, 0);
+playerCarrier.add(engineLight);
+
+// Turret mounts (6)
+const turretPositions = [
+    [2, 1.15, 1.5], [0, 1.15, 1.5], [-2, 1.15, 1.5],
+    [2, 1.15, -1.5], [0, 1.15, -1.5], [-2, 1.15, -1.5]
+];
+turretPositions.forEach(([x, y, z]) => {
+    const base = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.2, 0.25, 0.3, 8),
+        new THREE.MeshStandardMaterial({ color: 0x778899, roughness: 0.3, metalness: 0.8 })
+    );
+    base.position.set(x, y, z);
+    playerCarrier.add(base);
+    const barrel = makeBox(0.08, 0.08, 0.6, 0x8899aa);
+    barrel.position.set(x + 0.3, y + 0.1, z);
+    playerCarrier.add(barrel);
+});
+
+playerCarrier.position.set(-15, 0, 2);
+playerCarrier.rotation.y = 0.15;
+scene.add(playerCarrier);
+
+// ═══════════════════════════════════════════
+// ENEMY CARRIER — IRN DEVASTATOR
+// ═══════════════════════════════════════════
+const enemyCarrier = new THREE.Group();
+
+// Main hull - more angular, longer, thinner
+const eHull = makeBox(14, 1.5, 5, 0x554444, { wireframe: true, wireColor: 0x774444 });
+enemyCarrier.add(eHull);
+
+// Wedge-shaped bridge
+const eBridge = makeBox(3, 2, 2.5, 0x664444, { wireframe: true, wireColor: 0x885555 });
+eBridge.position.set(3, 1.75, 0);
+eBridge.rotation.z = -0.15; // slight taper effect
+enemyCarrier.add(eBridge);
+
+// Bridge spike
+const eSpike = makeBox(0.1, 1.5, 0.1, 0x886666);
+eSpike.position.set(3, 3.2, 0);
+enemyCarrier.add(eSpike);
+
+// Wedge front addition
+const eWedge = makeBox(2, 0.8, 4, 0x554444, { wireframe: true, wireColor: 0x664444 });
+eWedge.position.set(8, -0.2, 0);
+eWedge.rotation.z = 0.1;
+enemyCarrier.add(eWedge);
+
+// Engine block
+const eEngine = makeBox(3.5, 2, 5, 0x443333, { wireframe: true, wireColor: 0x664444 });
+eEngine.position.set(-8, 0, 0);
+enemyCarrier.add(eEngine);
+
+// Red engine circles (4)
+for (let ey = 0; ey < 2; ey++) {
+    for (let ez = 0; ez < 2; ez++) {
+        const ring = new THREE.Mesh(
+            new THREE.RingGeometry(0.35, 0.6, 16),
+            new THREE.MeshBasicMaterial({ color: 0xff3322, side: THREE.DoubleSide })
+        );
+        ring.position.set(-9.8, -0.4 + ey * 1, -0.8 + ez * 1.6);
+        ring.rotation.y = Math.PI / 2;
+        enemyCarrier.add(ring);
+
+        const glow = new THREE.Mesh(
+            new THREE.CircleGeometry(0.35, 12),
+            new THREE.MeshBasicMaterial({ color: 0xff6644, transparent: true, opacity: 0.5, side: THREE.DoubleSide })
+        );
+        glow.position.copy(ring.position);
+        glow.position.x -= 0.01;
+        glow.rotation.y = Math.PI / 2;
+        enemyCarrier.add(glow);
+    }
+}
+
+const eEngineLight = new THREE.PointLight(0xff4422, 2, 8);
+eEngineLight.position.set(-10, 0, 0);
+enemyCarrier.add(eEngineLight);
+
+// More weapon turrets (8)
+const eTurretPos = [
+    [4, 0.9, 2], [2, 0.9, 2], [0, 0.9, 2], [-2, 0.9, 2],
+    [4, 0.9, -2], [2, 0.9, -2], [0, 0.9, -2], [-2, 0.9, -2]
+];
+eTurretPos.forEach(([x, y, z]) => {
+    const base = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.2, 0.28, 0.35, 8),
+        new THREE.MeshStandardMaterial({ color: 0x886666, roughness: 0.3, metalness: 0.8 })
+    );
+    base.position.set(x, y, z);
+    enemyCarrier.add(base);
+    const barrel = makeBox(0.08, 0.08, 0.55, 0x997777);
+    barrel.position.set(x - 0.3, y + 0.1, z);
+    enemyCarrier.add(barrel);
+});
+
+// Battle damage — missing chunk + darkened area
+const damageMark = makeBox(2, 1.2, 1.5, 0x221111, {
+    roughness: 0.9, metalness: 0.2, emissive: 0x110500, emissiveIntensity: 0.3
+});
+damageMark.position.set(-3, 0.5, 2.2);
+enemyCarrier.add(damageMark);
+
+// Smoke particles from damage
+const smokeGeo = new THREE.BufferGeometry();
+const smokeCount = 30;
+const smokePositions = new Float32Array(smokeCount * 3);
+const smokeVelocities = [];
+for (let i = 0; i < smokeCount; i++) {
+    smokePositions[i * 3] = 0;
+    smokePositions[i * 3 + 1] = 0;
+    smokePositions[i * 3 + 2] = 0;
+    smokeVelocities.push({
+        x: (Math.random() - 0.5) * 0.01,
+        y: Math.random() * 0.02 + 0.005,
+        z: (Math.random() - 0.5) * 0.01,
+        life: Math.random()
+    });
+}
+smokeGeo.setAttribute('position', new THREE.BufferAttribute(smokePositions, 3));
+const smokeMat = new THREE.PointsMaterial({
+    color: 0x553322, size: 0.3, transparent: true, opacity: 0.4, sizeAttenuation: true
+});
+const smoke = new THREE.Points(smokeGeo, smokeMat);
+smoke.position.set(-3, 1, 2.2);
+enemyCarrier.add(smoke);
+
+enemyCarrier.position.set(15, -1, -3);
+enemyCarrier.rotation.y = Math.PI + 0.2;
+scene.add(enemyCarrier);
+
+// ═══════════════════════════════════════════
+// SHIELD EFFECT — Player carrier
+// ═══════════════════════════════════════════
+const shieldGeo = new THREE.SphereGeometry(7, 24, 24);
+const shieldMat = new THREE.MeshBasicMaterial({
+    color: 0x4488ff, transparent: true, opacity: 0, side: THREE.DoubleSide,
+    depthWrite: false
+});
+const shield = new THREE.Mesh(shieldGeo, shieldMat);
+shield.position.copy(playerCarrier.position);
+scene.add(shield);
+
+let shieldFlashTime = 0;
+let shieldActive = false;
+
+function triggerShield() {
+    shieldActive = true;
+    shieldFlashTime = 0;
+}
+
+// ═══════════════════════════════════════════
+// BROADSIDE TRACERS
+// ═══════════════════════════════════════════
+class Tracer {
+    constructor(origin, target, color, miss = false) {
+        this.origin = origin.clone();
+        this.target = target.clone();
+        this.miss = miss;
+        if (miss) {
+            // Offset target so it flies past
+            const dir = new THREE.Vector3().subVectors(target, origin).normalize();
+            const perp = new THREE.Vector3(-dir.z, dir.y * 0.5, dir.x).normalize();
+            this.target.add(perp.multiplyScalar(5 + Math.random() * 8));
+        }
+        this.progress = 0;
+        this.speed = 0.008 + Math.random() * 0.006;
+        this.alive = true;
+        this.impacting = false;
+        this.impactTime = 0;
+
+        const geo = new THREE.BufferGeometry();
+        const positions = new Float32Array(6);
+        geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+        this.lineMat = new THREE.LineBasicMaterial({
+            color, transparent: true, opacity: 1, linewidth: 2
+        });
+        this.line = new THREE.Line(geo, this.lineMat);
+        scene.add(this.line);
+
+        // Impact spark particles
+        this.sparkGroup = null;
+        this.sparkVels = [];
+        this.color = color;
+    }
+
+    update() {
+        if (!this.alive) return;
+
+        this.progress += this.speed;
+
+        const head = new THREE.Vector3().lerpVectors(this.origin, this.target, Math.min(this.progress, 1));
+        const tail = new THREE.Vector3().lerpVectors(this.origin, this.target, Math.max(this.progress - 0.08, 0));
+
+        const posArr = this.line.geometry.attributes.position.array;
+        posArr[0] = tail.x; posArr[1] = tail.y; posArr[2] = tail.z;
+        posArr[3] = head.x; posArr[4] = head.y; posArr[5] = head.z;
+        this.line.geometry.attributes.position.needsUpdate = true;
+
+        // Fade out as it travels
+        this.lineMat.opacity = Math.max(0, 1 - this.progress * 0.5);
+
+        if (this.progress >= 1 && !this.impacting && !this.miss) {
+            this.impacting = true;
+            this.impactTime = 0;
+            this.createSparks(this.target);
+        }
+
+        if (this.impacting) {
+            this.impactTime += 0.016;
+            this.updateSparks();
+            if (this.impactTime > 0.5) {
+                this.dispose();
+            }
+        }
+
+        if (this.progress > 1.3) {
+            this.dispose();
+        }
+    }
+
+    createSparks(pos) {
+        const count = 8;
+        const geo = new THREE.BufferGeometry();
+        const positions = new Float32Array(count * 3);
+        this.sparkVels = [];
+        for (let i = 0; i < count; i++) {
+            positions[i * 3] = pos.x;
+            positions[i * 3 + 1] = pos.y;
+            positions[i * 3 + 2] = pos.z;
+            this.sparkVels.push(new THREE.Vector3(
+                (Math.random() - 0.5) * 3,
+                (Math.random() - 0.5) * 3,
+                (Math.random() - 0.5) * 3
+            ));
+        }
+        geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+        const mat = new THREE.PointsMaterial({
+            color: this.color, size: 0.2, transparent: true, opacity: 1,
+            sizeAttenuation: true
+        });
+        this.sparkGroup = new THREE.Points(geo, mat);
+        scene.add(this.sparkGroup);
+    }
+
+    updateSparks() {
+        if (!this.sparkGroup) return;
+        const pos = this.sparkGroup.geometry.attributes.position.array;
+        for (let i = 0; i < this.sparkVels.length; i++) {
+            pos[i * 3] += this.sparkVels[i].x * 0.03;
+            pos[i * 3 + 1] += this.sparkVels[i].y * 0.03;
+            pos[i * 3 + 2] += this.sparkVels[i].z * 0.03;
+        }
+        this.sparkGroup.geometry.attributes.position.needsUpdate = true;
+        this.sparkGroup.material.opacity = Math.max(0, 1 - this.impactTime * 2.5);
+    }
+
+    dispose() {
+        this.alive = false;
+        scene.remove(this.line);
+        this.line.geometry.dispose();
+        this.lineMat.dispose();
+        if (this.sparkGroup) {
+            scene.remove(this.sparkGroup);
+            this.sparkGroup.geometry.dispose();
+            this.sparkGroup.material.dispose();
+        }
+    }
+}
+
+const tracers = [];
+
+function spawnTracers() {
+    // Player -> Enemy (cyan)
+    for (let i = 0; i < 4; i++) {
+        const origin = new THREE.Vector3(
+            playerCarrier.position.x + (Math.random() - 0.3) * 8,
+            playerCarrier.position.y + (Math.random() - 0.5) * 1.5,
+            playerCarrier.position.z + (Math.random() - 0.5) * 3
+        );
+        const target = new THREE.Vector3(
+            enemyCarrier.position.x + (Math.random() - 0.5) * 8,
+            enemyCarrier.position.y + (Math.random() - 0.5) * 1.5,
+            enemyCarrier.position.z + (Math.random() - 0.5) * 3
+        );
+        const miss = Math.random() < 0.25;
+        tracers.push(new Tracer(origin, target, 0x44ccff, miss));
+    }
+
+    // Enemy -> Player (red)
+    for (let i = 0; i < 4; i++) {
+        const origin = new THREE.Vector3(
+            enemyCarrier.position.x + (Math.random() - 0.7) * 8,
+            enemyCarrier.position.y + (Math.random() - 0.5) * 1.5,
+            enemyCarrier.position.z + (Math.random() - 0.5) * 3
+        );
+        const target = new THREE.Vector3(
+            playerCarrier.position.x + (Math.random() - 0.5) * 8,
+            playerCarrier.position.y + (Math.random() - 0.5) * 1.5,
+            playerCarrier.position.z + (Math.random() - 0.5) * 3
+        );
+        const miss = Math.random() < 0.25;
+        const t = new Tracer(origin, target, 0xff4422, miss);
+        tracers.push(t);
+        // Enemy fire triggers shield on player
+        if (!miss && Math.random() < 0.5) {
+            setTimeout(triggerShield, (1 / t.speed) * 16 * 0.9);
+        }
+    }
+}
+
+// Initial volley + periodic
+spawnTracers();
+setInterval(spawnTracers, 2800);
+
+// ═══════════════════════════════════════════
+// FIGHTER SWARMS — InstancedMesh
+// ═══════════════════════════════════════════
+const fighterGeo = new THREE.BoxGeometry(0.05, 0.02, 0.15);
+
+// Player fighters (20)
+const playerFighterCount = 20;
+const playerFighterMat = new THREE.MeshStandardMaterial({
+    color: 0x4488cc, emissive: 0x224466, emissiveIntensity: 0.5,
+    roughness: 0.4, metalness: 0.6
+});
+const playerFighters = new THREE.InstancedMesh(fighterGeo, playerFighterMat, playerFighterCount);
+scene.add(playerFighters);
+
+// Store fighter data
+const pFighterData = [];
+for (let i = 0; i < playerFighterCount; i++) {
+    const isDefense = i < 8;
+    pFighterData.push({
+        isDefense,
+        orbitAngle: Math.random() * Math.PI * 2,
+        orbitRadius: 5 + Math.random() * 3,
+        orbitSpeed: 0.3 + Math.random() * 0.2,
+        orbitY: (Math.random() - 0.5) * 4,
+        // Attack run params
+        attackPhase: Math.random() * Math.PI * 2,
+        attackOffset: new THREE.Vector3(
+            (Math.random() - 0.5) * 2,
+            (Math.random() - 0.5) * 1.5,
+            (Math.random() - 0.5) * 2
+        ),
+        noiseX: Math.random() * 100,
+        noiseZ: Math.random() * 100
+    });
+}
+
+// Enemy fighters (18)
+const enemyFighterCount = 18;
+const enemyFighterMat = new THREE.MeshStandardMaterial({
+    color: 0xcc4444, emissive: 0x662222, emissiveIntensity: 0.5,
+    roughness: 0.4, metalness: 0.6
+});
+const enemyFighters = new THREE.InstancedMesh(fighterGeo, enemyFighterMat, enemyFighterCount);
+scene.add(enemyFighters);
+
+const eFighterData = [];
+for (let i = 0; i < enemyFighterCount; i++) {
+    const isDefense = i < 7;
+    eFighterData.push({
+        isDefense,
+        orbitAngle: Math.random() * Math.PI * 2,
+        orbitRadius: 5 + Math.random() * 3,
+        orbitSpeed: 0.3 + Math.random() * 0.2,
+        orbitY: (Math.random() - 0.5) * 4,
+        attackPhase: Math.random() * Math.PI * 2,
+        attackOffset: new THREE.Vector3(
+            (Math.random() - 0.5) * 2,
+            (Math.random() - 0.5) * 1.5,
+            (Math.random() - 0.5) * 2
+        ),
+        noiseX: Math.random() * 100,
+        noiseZ: Math.random() * 100
+    });
+}
+
+const dummy = new THREE.Object3D();
+
+function simplexNoise(x) {
+    return Math.sin(x * 1.7) * 0.5 + Math.sin(x * 3.1) * 0.25 + Math.sin(x * 5.3) * 0.125;
+}
+
+function updateFighters(t) {
+    // Player fighters
+    for (let i = 0; i < playerFighterCount; i++) {
+        const d = pFighterData[i];
+        if (d.isDefense) {
+            // Orbit around player carrier
+            const a = d.orbitAngle + t * d.orbitSpeed;
+            dummy.position.set(
+                playerCarrier.position.x + Math.cos(a) * d.orbitRadius,
+                playerCarrier.position.y + d.orbitY + Math.sin(t * 0.5 + i) * 0.3,
+                playerCarrier.position.z + Math.sin(a) * d.orbitRadius
+            );
+            dummy.lookAt(
+                playerCarrier.position.x + Math.cos(a + 0.1) * d.orbitRadius,
+                dummy.position.y,
+                playerCarrier.position.z + Math.sin(a + 0.1) * d.orbitRadius
+            );
+        } else {
+            // Attack run toward enemy carrier
+            const midX = (playerCarrier.position.x + enemyCarrier.position.x) / 2;
+            const midZ = (playerCarrier.position.z + enemyCarrier.position.z) / 2;
+            const progress = (Math.sin(t * 0.2 + d.attackPhase) + 1) / 2;
+            const px = THREE.MathUtils.lerp(playerCarrier.position.x + 5, enemyCarrier.position.x - 5, progress);
+            const pz = THREE.MathUtils.lerp(playerCarrier.position.z, enemyCarrier.position.z, progress);
+            const noise = simplexNoise(t * 0.8 + d.noiseX);
+            dummy.position.set(
+                px + d.attackOffset.x + noise * 0.8,
+                d.attackOffset.y + Math.sin(t * 0.6 + d.noiseZ) * 0.5,
+                pz + d.attackOffset.z + simplexNoise(t * 0.7 + d.noiseZ) * 0.8
+            );
+            // Face direction of travel
+            const nextPx = THREE.MathUtils.lerp(playerCarrier.position.x + 5, enemyCarrier.position.x - 5,
+                (Math.sin(t * 0.2 + d.attackPhase + 0.05) + 1) / 2);
+            dummy.lookAt(nextPx, dummy.position.y, pz + 0.5);
+        }
+        dummy.updateMatrix();
+        playerFighters.setMatrixAt(i, dummy.matrix);
+    }
+    playerFighters.instanceMatrix.needsUpdate = true;
+
+    // Enemy fighters
+    for (let i = 0; i < enemyFighterCount; i++) {
+        const d = eFighterData[i];
+        if (d.isDefense) {
+            const a = d.orbitAngle + t * d.orbitSpeed;
+            dummy.position.set(
+                enemyCarrier.position.x + Math.cos(a) * d.orbitRadius,
+                enemyCarrier.position.y + d.orbitY + Math.sin(t * 0.5 + i) * 0.3,
+                enemyCarrier.position.z + Math.sin(a) * d.orbitRadius
+            );
+            dummy.lookAt(
+                enemyCarrier.position.x + Math.cos(a + 0.1) * d.orbitRadius,
+                dummy.position.y,
+                enemyCarrier.position.z + Math.sin(a + 0.1) * d.orbitRadius
+            );
+        } else {
+            const progress = (Math.sin(t * 0.2 + d.attackPhase) + 1) / 2;
+            const px = THREE.MathUtils.lerp(enemyCarrier.position.x - 5, playerCarrier.position.x + 5, progress);
+            const pz = THREE.MathUtils.lerp(enemyCarrier.position.z, playerCarrier.position.z, progress);
+            const noise = simplexNoise(t * 0.8 + d.noiseX);
+            dummy.position.set(
+                px + d.attackOffset.x + noise * 0.8,
+                d.attackOffset.y + Math.sin(t * 0.6 + d.noiseZ) * 0.5,
+                pz + d.attackOffset.z + simplexNoise(t * 0.7 + d.noiseZ) * 0.8
+            );
+            const nextPx = THREE.MathUtils.lerp(enemyCarrier.position.x - 5, playerCarrier.position.x + 5,
+                (Math.sin(t * 0.2 + d.attackPhase + 0.05) + 1) / 2);
+            dummy.lookAt(nextPx, dummy.position.y, pz - 0.5);
+        }
+        dummy.updateMatrix();
+        enemyFighters.setMatrixAt(i, dummy.matrix);
+    }
+    enemyFighters.instanceMatrix.needsUpdate = true;
+}
+
+// ═══════════════════════════════════════════
+// DOGFIGHT ZONE — Center flashes
+// ═══════════════════════════════════════════
+const dogfightFlashes = [];
+for (let i = 0; i < 8; i++) {
+    const flash = new THREE.Mesh(
+        new THREE.SphereGeometry(0.06, 6, 6),
+        new THREE.MeshBasicMaterial({ color: i < 4 ? 0xffffff : 0xffaa44 })
+    );
+    flash.position.set(
+        (Math.random() - 0.5) * 6,
+        (Math.random() - 0.5) * 2,
+        (Math.random() - 0.5) * 4
+    );
+    flash.visible = false;
+    flash.userData.timer = Math.random() * 3;
+    flash.userData.interval = 0.1 + Math.random() * 0.3;
+    scene.add(flash);
+    dogfightFlashes.push(flash);
+}
+
+// Fighter debris
+const debrisGeo = new THREE.BoxGeometry(0.03, 0.03, 0.03);
+const debrisMat = new THREE.MeshStandardMaterial({ color: 0x887766, roughness: 0.9 });
+const debrisPieces = [];
+for (let i = 0; i < 12; i++) {
+    const piece = new THREE.Mesh(debrisGeo, debrisMat);
+    piece.position.set(
+        (Math.random() - 0.5) * 4,
+        (Math.random() - 0.5) * 2,
+        (Math.random() - 0.5) * 3
+    );
+    piece.userData.vel = new THREE.Vector3(
+        (Math.random() - 0.5) * 0.005,
+        (Math.random() - 0.5) * 0.003,
+        (Math.random() - 0.5) * 0.005
+    );
+    piece.userData.rotSpeed = new THREE.Vector3(
+        Math.random() * 0.02,
+        Math.random() * 0.02,
+        Math.random() * 0.02
+    );
+    scene.add(piece);
+    debrisPieces.push(piece);
+}
+
+// Small explosions in dogfight zone
+class MiniExplosion {
+    constructor(position) {
+        const count = 12;
+        const geo = new THREE.BufferGeometry();
+        const positions = new Float32Array(count * 3);
+        this.velocities = [];
+        for (let i = 0; i < count; i++) {
+            positions[i * 3] = position.x;
+            positions[i * 3 + 1] = position.y;
+            positions[i * 3 + 2] = position.z;
+            this.velocities.push(new THREE.Vector3(
+                (Math.random() - 0.5) * 2,
+                (Math.random() - 0.5) * 2,
+                (Math.random() - 0.5) * 2
+            ));
+        }
+        geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+        this.particles = new THREE.Points(geo, new THREE.PointsMaterial({
+            color: 0xffaa33, size: 0.08, transparent: true, opacity: 1, sizeAttenuation: true
+        }));
+        scene.add(this.particles);
+        this.life = 0;
+        this.alive = true;
+    }
+
+    update(dt) {
+        if (!this.alive) return;
+        this.life += dt;
+        const pos = this.particles.geometry.attributes.position.array;
+        for (let i = 0; i < this.velocities.length; i++) {
+            pos[i * 3] += this.velocities[i].x * dt;
+            pos[i * 3 + 1] += this.velocities[i].y * dt;
+            pos[i * 3 + 2] += this.velocities[i].z * dt;
+        }
+        this.particles.geometry.attributes.position.needsUpdate = true;
+        this.particles.material.opacity = Math.max(0, 1 - this.life * 1.5);
+        if (this.life > 0.8) {
+            this.alive = false;
+            scene.remove(this.particles);
+            this.particles.geometry.dispose();
+            this.particles.material.dispose();
+        }
+    }
+}
+
+const miniExplosions = [];
+function spawnMiniExplosion() {
+    const pos = new THREE.Vector3(
+        (Math.random() - 0.5) * 5,
+        (Math.random() - 0.5) * 2,
+        (Math.random() - 0.5) * 3
+    );
+    miniExplosions.push(new MiniExplosion(pos));
+}
+setInterval(spawnMiniExplosion, 1500 + Math.random() * 2000);
+spawnMiniExplosion();
+
+// ═══════════════════════════════════════════
+// TORPEDOES
+// ═══════════════════════════════════════════
+class Torpedo {
+    constructor(origin, target, delay) {
+        this.origin = origin.clone();
+        this.target = target.clone();
+        this.progress = -delay; // negative = waiting to launch
+        this.speed = 0.003;
+        this.alive = true;
+        this.impacted = false;
+        this.impactExplosion = null;
+
+        // Torpedo body
+        const tGeo = new THREE.BoxGeometry(0.12, 0.12, 0.3);
+        this.body = new THREE.Mesh(tGeo, new THREE.MeshBasicMaterial({ color: 0x44ffff }));
+        this.body.visible = false;
+        scene.add(this.body);
+
+        // Trail
+        const trailCount = 30;
+        const trailPos = new Float32Array(trailCount * 3);
+        const trailGeo = new THREE.BufferGeometry();
+        trailGeo.setAttribute('position', new THREE.BufferAttribute(trailPos, 3));
+        this.trail = new THREE.Points(trailGeo, new THREE.PointsMaterial({
+            color: 0x44ddff, size: 0.08, transparent: true, opacity: 0.7, sizeAttenuation: true
+        }));
+        this.trail.visible = false;
+        scene.add(this.trail);
+        this.trailCount = trailCount;
+        this.trailHistory = [];
+    }
+
+    update(dt) {
+        if (!this.alive) return;
+
+        this.progress += this.speed;
+
+        if (this.progress < 0) return;
+
+        this.body.visible = true;
+        this.trail.visible = true;
+
+        const p = Math.min(this.progress, 1);
+        const pos = new THREE.Vector3().lerpVectors(this.origin, this.target, p);
+        this.body.position.copy(pos);
+        this.body.lookAt(this.target);
+
+        // Trail
+        this.trailHistory.unshift(pos.clone());
+        if (this.trailHistory.length > this.trailCount) this.trailHistory.length = this.trailCount;
+        const trailArr = this.trail.geometry.attributes.position.array;
+        for (let i = 0; i < this.trailCount; i++) {
+            if (i < this.trailHistory.length) {
+                trailArr[i * 3] = this.trailHistory[i].x;
+                trailArr[i * 3 + 1] = this.trailHistory[i].y;
+                trailArr[i * 3 + 2] = this.trailHistory[i].z;
+            } else {
+                trailArr[i * 3] = pos.x;
+                trailArr[i * 3 + 1] = pos.y;
+                trailArr[i * 3 + 2] = pos.z;
+            }
+        }
+        this.trail.geometry.attributes.position.needsUpdate = true;
+
+        // Impact
+        if (this.progress >= 1 && !this.impacted) {
+            this.impacted = true;
+            this.body.visible = false;
+            this.createBigExplosion(this.target);
+        }
+
+        if (this.impacted && this.impactExplosion) {
+            this.updateBigExplosion(dt);
+        }
+    }
+
+    createBigExplosion(pos) {
+        const count = 50;
+        const geo = new THREE.BufferGeometry();
+        const positions = new Float32Array(count * 3);
+        const colors = new Float32Array(count * 3);
+        this.explosionVels = [];
+        for (let i = 0; i < count; i++) {
+            positions[i * 3] = pos.x;
+            positions[i * 3 + 1] = pos.y;
+            positions[i * 3 + 2] = pos.z;
+            const col = Math.random() < 0.5
+                ? new THREE.Color(0xff8833)
+                : new THREE.Color(0xffddaa);
+            colors[i * 3] = col.r;
+            colors[i * 3 + 1] = col.g;
+            colors[i * 3 + 2] = col.b;
+            this.explosionVels.push(new THREE.Vector3(
+                (Math.random() - 0.5) * 6,
+                (Math.random() - 0.5) * 6,
+                (Math.random() - 0.5) * 6
+            ));
+        }
+        geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+        geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+        const mat = new THREE.PointsMaterial({
+            size: 0.25, transparent: true, opacity: 1,
+            vertexColors: true, sizeAttenuation: true
+        });
+        this.impactExplosion = new THREE.Points(geo, mat);
+        scene.add(this.impactExplosion);
+        this.explosionLife = 0;
+
+        // Flash light
+        this.flashLight = new THREE.PointLight(0xff8833, 5, 15);
+        this.flashLight.position.copy(pos);
+        scene.add(this.flashLight);
+    }
+
+    updateBigExplosion(dt) {
+        this.explosionLife += dt;
+        const pos = this.impactExplosion.geometry.attributes.position.array;
+        for (let i = 0; i < this.explosionVels.length; i++) {
+            pos[i * 3] += this.explosionVels[i].x * dt;
+            pos[i * 3 + 1] += this.explosionVels[i].y * dt;
+            pos[i * 3 + 2] += this.explosionVels[i].z * dt;
+            this.explosionVels[i].multiplyScalar(0.97);
+        }
+        this.impactExplosion.geometry.attributes.position.needsUpdate = true;
+        this.impactExplosion.material.opacity = Math.max(0, 1 - this.explosionLife * 0.8);
+
+        if (this.flashLight) {
+            this.flashLight.intensity = Math.max(0, 5 - this.explosionLife * 8);
+        }
+
+        if (this.explosionLife > 1.5) {
+            scene.remove(this.impactExplosion);
+            this.impactExplosion.geometry.dispose();
+            this.impactExplosion.material.dispose();
+            if (this.flashLight) {
+                scene.remove(this.flashLight);
+                this.flashLight.dispose();
+            }
+            this.impactExplosion = null;
+            this.trail.visible = false;
+        }
+    }
+}
+
+const torpedoes = [];
+
+function launchTorpedoWave() {
+    const origin1 = new THREE.Vector3(
+        playerCarrier.position.x + 4,
+        playerCarrier.position.y - 0.8,
+        playerCarrier.position.z
+    );
+    const target1 = new THREE.Vector3(
+        enemyCarrier.position.x - 3 + (Math.random() - 0.5) * 4,
+        enemyCarrier.position.y + (Math.random() - 0.5) * 1,
+        enemyCarrier.position.z + (Math.random() - 0.5) * 2
+    );
+    torpedoes.push(new Torpedo(origin1, target1, 0));
+    torpedoes.push(new Torpedo(
+        origin1.clone().add(new THREE.Vector3(0, 0, 1)),
+        target1.clone().add(new THREE.Vector3(1, 0.5, 1)),
+        0.3
+    ));
+}
+launchTorpedoWave();
+setInterval(launchTorpedoWave, 8000);
+
+// ═══════════════════════════════════════════
+// SMOKE UPDATE
+// ═══════════════════════════════════════════
+function updateSmoke(t) {
+    const pos = smoke.geometry.attributes.position.array;
+    for (let i = 0; i < smokeCount; i++) {
+        const v = smokeVelocities[i];
+        v.life += 0.005;
+        if (v.life > 1) {
+            v.life = 0;
+            pos[i * 3] = 0;
+            pos[i * 3 + 1] = 0;
+            pos[i * 3 + 2] = 0;
+        }
+        pos[i * 3] += v.x + Math.sin(t + i) * 0.002;
+        pos[i * 3 + 1] += v.y;
+        pos[i * 3 + 2] += v.z + Math.cos(t + i) * 0.002;
+    }
+    smoke.geometry.attributes.position.needsUpdate = true;
+    smokeMat.opacity = 0.3 + Math.sin(t * 2) * 0.1;
+}
+
+// ═══════════════════════════════════════════
+// CAMERA
+// ═══════════════════════════════════════════
+function updateCamera(t) {
+    const phase = t * 0.05;
+    camera.position.set(
+        Math.cos(phase) * 35,
+        8 + Math.sin(phase * 0.7) * 5,
+        Math.sin(phase) * 35
+    );
+    camera.lookAt(0, 0, 0);
+}
+
+// ═══════════════════════════════════════════
+// FPS COUNTER
+// ═══════════════════════════════════════════
+const statsEl = document.getElementById('stats');
+let frameCount = 0;
+let lastFpsTime = performance.now();
+
+function updateFPS() {
+    frameCount++;
+    const now = performance.now();
+    if (now - lastFpsTime >= 1000) {
+        const fps = Math.round(frameCount * 1000 / (now - lastFpsTime));
+        statsEl.textContent = fps + ' FPS';
+        frameCount = 0;
+        lastFpsTime = now;
+    }
+}
+
+// ═══════════════════════════════════════════
+// ANIMATION LOOP
+// ═══════════════════════════════════════════
+const clock = new THREE.Clock();
+
+function animate() {
+    requestAnimationFrame(animate);
+
+    const dt = clock.getDelta();
+    const t = clock.getElapsedTime();
+
+    // Camera
+    updateCamera(t);
+
+    // Fighters
+    updateFighters(t);
+
+    // Tracers
+    for (let i = tracers.length - 1; i >= 0; i--) {
+        tracers[i].update();
+        if (!tracers[i].alive) tracers.splice(i, 1);
+    }
+
+    // Torpedoes
+    for (let i = torpedoes.length - 1; i >= 0; i--) {
+        torpedoes[i].update(dt);
+        if (!torpedoes[i].alive && torpedoes[i].impactExplosion === null &&
+            torpedoes[i].impacted && torpedoes[i].explosionLife > 1.5) {
+            torpedoes.splice(i, 1);
+        }
+    }
+
+    // Shield flash
+    if (shieldActive) {
+        shieldFlashTime += dt;
+        shield.position.copy(playerCarrier.position);
+        const fade = Math.max(0, 1 - shieldFlashTime * 3);
+        shieldMat.opacity = fade * 0.12;
+        shield.visible = fade > 0.01;
+        if (fade <= 0.01) {
+            shieldActive = false;
+            shield.visible = false;
+        }
+    }
+
+    // Dogfight flashes
+    dogfightFlashes.forEach(f => {
+        f.userData.timer += dt;
+        if (f.userData.timer > f.userData.interval) {
+            f.userData.timer = 0;
+            f.userData.interval = 0.05 + Math.random() * 0.3;
+            f.visible = Math.random() < 0.6;
+            f.position.set(
+                (Math.random() - 0.5) * 6,
+                (Math.random() - 0.5) * 2,
+                (Math.random() - 0.5) * 4
+            );
+        }
+    });
+
+    // Debris drift
+    debrisPieces.forEach(p => {
+        p.position.add(p.userData.vel);
+        p.rotation.x += p.userData.rotSpeed.x;
+        p.rotation.y += p.userData.rotSpeed.y;
+        p.rotation.z += p.userData.rotSpeed.z;
+    });
+
+    // Mini explosions
+    for (let i = miniExplosions.length - 1; i >= 0; i--) {
+        miniExplosions[i].update(dt);
+        if (!miniExplosions[i].alive) miniExplosions.splice(i, 1);
+    }
+
+    // Smoke
+    updateSmoke(t);
+
+    // Engine glow pulse
+    const enginePulse = 0.8 + Math.sin(t * 3) * 0.2;
+    engineLight.intensity = 2 * enginePulse;
+    eEngineLight.intensity = 2 * enginePulse;
+
+    // FPS
+    updateFPS();
+
+    renderer.render(scene, camera);
+}
+
+animate();
+
+// ── Resize ──
+window.addEventListener('resize', () => {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+});
+</script>
+</body>
+</html>

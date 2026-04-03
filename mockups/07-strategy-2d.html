@@ -1,0 +1,1066 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>07 — Strategy 2D</title>
+    <style>
+        *{margin:0;padding:0}body{overflow:hidden;background:#000;touch-action:none}canvas{display:block}
+        #ui{position:fixed;top:0;left:0;padding:12px;font-family:'Courier New',monospace;color:#fff;pointer-events:none;z-index:10}
+        #ui h1{font-size:14px;color:#00ff88;margin-bottom:4px}
+        #ui p{font-size:11px;color:#888;line-height:1.4;max-width:280px}
+        #stats{font-size:11px;color:#ffcc00;margin-top:8px}
+        #back{position:fixed;top:12px;right:12px;font-family:'Courier New',monospace;font-size:12px;color:#00ff88;text-decoration:none;z-index:10}
+        #terminal{position:fixed;bottom:0;left:0;right:0;padding:8px 12px;font-family:'Courier New',monospace;font-size:11px;color:#00ff88;background:rgba(0,20,0,0.85);border-top:1px solid #00ff8844;z-index:10;pointer-events:none;white-space:nowrap;overflow:hidden}
+        #terminal .cursor{animation:blink 1s step-end infinite}
+        @keyframes blink{0%,100%{opacity:1}50%{opacity:0}}
+        #unitPanel{position:fixed;top:60px;right:12px;font-family:'Courier New',monospace;font-size:11px;color:#00ff88;z-index:10;pointer-events:none;text-align:right;line-height:1.6;white-space:pre}
+        #killFeed{position:fixed;bottom:36px;right:12px;font-family:'Courier New',monospace;font-size:10px;color:#ffcc00;z-index:10;pointer-events:none;text-align:right;line-height:1.5;max-width:320px}
+        #killFeed .kill-green{color:#00ff88}
+        #killFeed .kill-red{color:#ff4444}
+    </style>
+</head>
+<body>
+<div id="ui">
+    <h1>07 / STRATEGY 2D</h1>
+    <p>Top-down tactical map &middot; Swarm warfare &middot; 3 unit types per side</p>
+    <div id="stats">-- FPS | 0 hexes</div>
+</div>
+<a id="back" href="../index.html">&larr; back</a>
+<div id="unitPanel">// FORCE OVERVIEW
+<span style="color:#00ff88">FRIENDLY: 22 UNITS</span>
+<span style="color:#00ff88">  SWM: 3&times;6 | TNK: 4 | SCT: 3</span>
+<span style="color:#555">&dash;&dash;&dash;&dash;&dash;&dash;&dash;&dash;&dash;&dash;&dash;&dash;&dash;&dash;&dash;&dash;&dash;</span>
+<span style="color:#ff4444">HOSTILE: 24 UNITS</span>
+<span style="color:#ff4444">  SWM: 2&times;9 | HVY: 3 | SCT: 2</span>
+<span style="color:#555">&dash;&dash;&dash;&dash;&dash;&dash;&dash;&dash;&dash;&dash;&dash;&dash;&dash;&dash;&dash;&dash;&dash;</span>
+<span style="color:#ffcc00">ENGAGEMENTS: 2 ACTIVE</span>
+<span style="color:#ff4444">THREAT: HIGH</span>
+</div>
+<div id="terminal">TACTICAL MAP // SWARM-1 ENGAGING SECTOR 4 // SWARM-3 CONVERGING // 2 CONTACTS NEUTRALIZED<span class="cursor">_</span></div>
+<div id="killFeed"></div>
+
+<script type="importmap">
+{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"}}
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+/* ═══════════════════════════════════════════════
+   RENDERER & CAMERA
+   ═══════════════════════════════════════════════ */
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setClearColor(0x000000);
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+
+const frustum = 45;
+let aspect = window.innerWidth / window.innerHeight;
+const camera = new THREE.OrthographicCamera(
+    frustum * aspect / -2, frustum * aspect / 2,
+    frustum / 2, frustum / -2, 0.1, 200
+);
+camera.position.set(0, 50, 0);
+camera.lookAt(0, 0, 0);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableRotate = false;
+controls.enableDamping = true;
+controls.dampingFactor = 0.1;
+controls.screenSpacePanning = true;
+controls.minZoom = 0.3;
+controls.maxZoom = 4;
+controls.mouseButtons = { LEFT: THREE.MOUSE.PAN, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.PAN };
+
+/* ═══════════════════════════════════════════════
+   HEX MATH (FLAT-TOP, AXIAL)
+   ═══════════════════════════════════════════════ */
+const HEX_SIZE = 1.0;
+const HEX_GAP = 0.06;
+const S = HEX_SIZE + HEX_GAP;
+const GRID_RADIUS = 12;
+
+function hexToWorld(q, r) {
+    const x = S * 1.5 * q;
+    const z = S * Math.sqrt(3) * (r + q / 2);
+    return { x, z };
+}
+
+function hexDist(q1, r1, q2, r2) {
+    const dq = q1 - q2, dr = r1 - r2;
+    return Math.max(Math.abs(dq), Math.abs(dr), Math.abs(dq + dr));
+}
+
+function createHexShape(radius) {
+    const shape = new THREE.Shape();
+    for (let i = 0; i < 6; i++) {
+        const angle = (Math.PI / 3) * i;
+        const x = radius * Math.cos(angle);
+        const y = radius * Math.sin(angle);
+        if (i === 0) shape.moveTo(x, y);
+        else shape.lineTo(x, y);
+    }
+    shape.closePath();
+    return shape;
+}
+
+/* ═══════════════════════════════════════════════
+   TERRITORY LAYOUT & KEY POSITIONS
+   ═══════════════════════════════════════════════ */
+const HQ_PLAYER = { q: 0, r: 8 };
+const HQ_ENEMY = { q: 0, r: -8 };
+
+const outposts = [
+    { q: -4, r: 7, side: 'friendly' },
+    { q: 3, r: 6, side: 'friendly' },
+    { q: -2, r: 5, side: 'friendly' },
+    { q: 4, r: -6, side: 'enemy' },
+    { q: -3, r: -7, side: 'enemy' },
+    { q: 2, r: -5, side: 'enemy' },
+    { q: -1, r: 1, side: 'contested' },
+    { q: 2, r: -1, side: 'contested' },
+];
+
+// Damaged hexes in contested zone
+const damagedHexes = [
+    { q: 0, r: 0 }, { q: 1, r: 0 }, { q: -1, r: 1 }, { q: 0, r: -1 }
+];
+function isDamaged(q, r) {
+    return damagedHexes.some(d => d.q === q && d.r === r);
+}
+
+function getKeyPos(q, r) {
+    if (q === HQ_PLAYER.q && r === HQ_PLAYER.r) return 'hq_friendly';
+    if (q === HQ_ENEMY.q && r === HQ_ENEMY.r) return 'hq_enemy';
+    for (const o of outposts) {
+        if (q === o.q && r === o.r) return 'outpost_' + o.side;
+    }
+    return null;
+}
+
+/* ═══════════════════════════════════════════════
+   FRIENDLY UNIT POSITIONS (for fog of war)
+   ═══════════════════════════════════════════════ */
+const friendlyPositions = [
+    HQ_PLAYER,
+    ...outposts.filter(o => o.side === 'friendly'),
+    // Swarm centers
+    { q: 1, r: 2 }, { q: -2, r: 3 }, { q: 3, r: 1 },
+    // Tanks
+    { q: -4, r: 7 }, { q: 3, r: 6 }, { q: -2, r: 5 }, { q: 0, r: 6 },
+    // Scouts
+    { q: -3, r: 4 }, { q: 4, r: 3 }, { q: 0, r: 4 },
+];
+
+function friendlyProximity(q, r) {
+    let minDist = Infinity;
+    for (const u of friendlyPositions) {
+        const d = hexDist(q, r, u.q, u.r);
+        if (d < minDist) minDist = d;
+    }
+    return minDist;
+}
+
+/* ═══════════════════════════════════════════════
+   BUILD HEX GRID
+   ═══════════════════════════════════════════════ */
+const hexShape = createHexShape(HEX_SIZE);
+const hexGeo = new THREE.ShapeGeometry(hexShape);
+const edgeGeo = new THREE.EdgesGeometry(hexGeo);
+
+const hexGroup = new THREE.Group();
+scene.add(hexGroup);
+
+const allHexes = [];
+const contestedHexes = [];
+const damagedHexMeshes = [];
+
+for (let q = -GRID_RADIUS; q <= GRID_RADIUS; q++) {
+    for (let r = Math.max(-GRID_RADIUS, -q - GRID_RADIUS); r <= Math.min(GRID_RADIUS, -q + GRID_RADIUS); r++) {
+        const pos = hexToWorld(q, r);
+        const keyPos = getKeyPos(q, r);
+        const proximity = friendlyProximity(q, r);
+        const damaged = isDamaged(q, r);
+
+        // Territory
+        let territory;
+        if (r > 3) territory = 'friendly';
+        else if (r < -3) territory = 'enemy';
+        else territory = 'contested';
+
+        let fillColor, edgeColor, edgeOpacity;
+        switch (territory) {
+            case 'friendly':
+                fillColor = 0x0a2a0a; edgeColor = 0x00ff88; edgeOpacity = 0.5; break;
+            case 'enemy':
+                fillColor = 0x2a0a0a; edgeColor = 0xff4444; edgeOpacity = 0.5; break;
+            case 'contested':
+                fillColor = 0x1a1a1a; edgeColor = 0x888888; edgeOpacity = 0.3; break;
+        }
+
+        if (damaged) {
+            fillColor = 0x2a1010;
+        }
+
+        // Key position overrides
+        if (keyPos === 'hq_friendly') {
+            fillColor = 0x0d4d0d; edgeColor = 0x00ffaa; edgeOpacity = 1.0;
+        } else if (keyPos === 'hq_enemy') {
+            fillColor = 0x4d0d0d; edgeColor = 0xff6666; edgeOpacity = 1.0;
+        } else if (keyPos && keyPos.includes('outpost')) {
+            edgeOpacity = 0.8;
+            if (keyPos.includes('friendly')) fillColor = 0x0d3d0d;
+            else if (keyPos.includes('enemy')) fillColor = 0x3d0d0d;
+            else fillColor = 0x2a2a1a;
+        }
+
+        // Fog of war
+        const fogFactor = Math.max(0.12, 1.0 - proximity * 0.06);
+
+        // Fill mesh
+        const mat = new THREE.MeshBasicMaterial({
+            color: fillColor, transparent: true, opacity: fogFactor * 0.8, side: THREE.DoubleSide
+        });
+        const mesh = new THREE.Mesh(hexGeo, mat.clone());
+        mesh.rotation.x = -Math.PI / 2;
+        mesh.position.set(pos.x, 0, pos.z);
+        hexGroup.add(mesh);
+
+        // Edge glow
+        const edgeMat = new THREE.LineBasicMaterial({
+            color: edgeColor, transparent: true, opacity: edgeOpacity * fogFactor
+        });
+        const edges = new THREE.LineSegments(edgeGeo, edgeMat.clone());
+        edges.rotation.x = -Math.PI / 2;
+        edges.position.set(pos.x, 0.01, pos.z);
+        hexGroup.add(edges);
+
+        const hexData = { mesh, edges, q, r, territory, keyPos, fogFactor, damaged };
+        allHexes.push(hexData);
+        if (territory === 'contested') contestedHexes.push(hexData);
+        if (damaged) damagedHexMeshes.push(hexData);
+    }
+}
+
+/* ═══════════════════════════════════════════════
+   DAMAGE MARKS (X marks on damaged hexes)
+   ═══════════════════════════════════════════════ */
+const damageMarks = [];
+for (const dh of damagedHexes) {
+    const pos = hexToWorld(dh.q, dh.r);
+    const sz = 0.35;
+    // X mark: two crossing lines
+    const pts1 = [new THREE.Vector3(-sz, 0.02, -sz), new THREE.Vector3(sz, 0.02, sz)];
+    const pts2 = [new THREE.Vector3(sz, 0.02, -sz), new THREE.Vector3(-sz, 0.02, sz)];
+    const markMat = new THREE.LineBasicMaterial({ color: 0xff2222, transparent: true, opacity: 0.5 });
+    const l1 = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts1), markMat.clone());
+    const l2 = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts2), markMat.clone());
+    l1.position.set(pos.x, 0, pos.z);
+    l2.position.set(pos.x, 0, pos.z);
+    scene.add(l1); scene.add(l2);
+    damageMarks.push(l1, l2);
+}
+
+/* ═══════════════════════════════════════════════
+   HQ & OUTPOST RING MARKERS
+   ═══════════════════════════════════════════════ */
+function createRingMarker(q, r, color, innerR, outerR, segments) {
+    const pos = hexToWorld(q, r);
+    const ringGeo = new THREE.RingGeometry(innerR, outerR, segments || 6);
+    const ring = new THREE.Mesh(ringGeo, new THREE.MeshBasicMaterial({
+        color, transparent: true, opacity: 0.6, side: THREE.DoubleSide
+    }));
+    ring.rotation.x = -Math.PI / 2;
+    ring.position.set(pos.x, 0.02, pos.z);
+    scene.add(ring);
+    return ring;
+}
+
+const playerHQRing = createRingMarker(HQ_PLAYER.q, HQ_PLAYER.r, 0x00ff88, HEX_SIZE * 1.2, HEX_SIZE * 1.5, 6);
+const enemyHQRing = createRingMarker(HQ_ENEMY.q, HQ_ENEMY.r, 0xff4444, HEX_SIZE * 1.2, HEX_SIZE * 1.5, 6);
+
+// HQ center pips
+for (const hq of [{ pos: HQ_PLAYER, col: 0x00ff88 }, { pos: HQ_ENEMY, col: 0xff4444 }]) {
+    const p = hexToWorld(hq.pos.q, hq.pos.r);
+    const pip = new THREE.Mesh(
+        new THREE.CircleGeometry(0.2, 8),
+        new THREE.MeshBasicMaterial({ color: hq.col, side: THREE.DoubleSide })
+    );
+    pip.rotation.x = -Math.PI / 2;
+    pip.position.set(p.x, 0.03, p.z);
+    scene.add(pip);
+}
+
+// Outpost rings
+const outpostRings = [];
+for (const o of outposts) {
+    const c = o.side === 'friendly' ? 0x00ff88 : o.side === 'enemy' ? 0xff4444 : 0xffcc00;
+    const ring = createRingMarker(o.q, o.r, c, HEX_SIZE * 0.8, HEX_SIZE * 1.0, 6);
+    outpostRings.push(ring);
+}
+
+/* ═══════════════════════════════════════════════
+   PLAYER SWARM CLUSTERS (3 swarms, 5-7 drones each)
+   ═══════════════════════════════════════════════ */
+const droneGeo = new THREE.CircleGeometry(0.12, 8);
+const droneMat = new THREE.MeshBasicMaterial({ color: 0x00ff88, side: THREE.DoubleSide });
+
+function createSwarm(centerQ, centerR, droneCount, state, color) {
+    const center = hexToWorld(centerQ, centerR);
+    const drones = [];
+    const mat = new THREE.MeshBasicMaterial({ color: color || 0x00ff88, side: THREE.DoubleSide });
+    for (let i = 0; i < droneCount; i++) {
+        const mesh = new THREE.Mesh(droneGeo, mat.clone());
+        mesh.rotation.x = -Math.PI / 2;
+        mesh.position.set(center.x, 0.06, center.z);
+        scene.add(mesh);
+        drones.push({
+            mesh,
+            orbitRadius: 0.3 + Math.random() * 0.5,
+            orbitSpeed: 1.5 + Math.random() * 2.0,
+            phaseOffset: Math.random() * Math.PI * 2,
+            wobbleX: Math.random() * 0.5,
+            wobbleZ: Math.random() * 0.5,
+            wobbleSpeed: 2 + Math.random() * 3,
+        });
+    }
+    return {
+        drones,
+        centerQ, centerR,
+        centerX: center.x, centerZ: center.z,
+        state, // PATROL, ATTACK, CONVERGE
+        targetQ: 0, targetR: 0,
+        targetX: 0, targetZ: 0,
+    };
+}
+
+// Player swarms
+const playerSwarms = [
+    createSwarm(1, 2, 6, 'PATROL', 0x00ff88),    // Patrolling
+    createSwarm(-2, 1, 7, 'ATTACK', 0x00ff88),    // Attacking toward enemy
+    createSwarm(3, 1, 5, 'CONVERGE', 0x00ff88),   // Converging on target
+];
+// Set attack target
+playerSwarms[1].targetQ = -1; playerSwarms[1].targetR = -1;
+const at1 = hexToWorld(-1, -1);
+playerSwarms[1].targetX = at1.x; playerSwarms[1].targetZ = at1.z;
+
+// Set converge target
+playerSwarms[2].targetQ = 2; playerSwarms[2].targetR = -1;
+const ct1 = hexToWorld(2, -1);
+playerSwarms[2].targetX = ct1.x; playerSwarms[2].targetZ = ct1.z;
+
+// Enemy swarms
+const enemySwarms = [
+    createSwarm(-1, -2, 9, 'ATTACK', 0xff4444),   // Pushing into contested
+    createSwarm(0, -7, 8, 'PATROL', 0xff4444),     // Defending HQ
+];
+enemySwarms[0].targetQ = -1; enemySwarms[0].targetR = 1;
+const eat1 = hexToWorld(-1, 1);
+enemySwarms[0].targetX = eat1.x; enemySwarms[0].targetZ = eat1.z;
+
+/* ═══════════════════════════════════════════════
+   PLAYER TANKS (4 units)
+   ═══════════════════════════════════════════════ */
+const tankPositions = [
+    { q: -4, r: 7 }, { q: 3, r: 6 }, { q: -2, r: 5 }, { q: 0, r: 6 }
+];
+const tanks = [];
+for (const tp of tankPositions) {
+    const pos = hexToWorld(tp.q, tp.r);
+    // Body: rectangle
+    const bodyGeo = new THREE.PlaneGeometry(0.4, 0.25);
+    const body = new THREE.Mesh(bodyGeo, new THREE.MeshBasicMaterial({ color: 0x00ff88, side: THREE.DoubleSide }));
+    body.rotation.x = -Math.PI / 2;
+    body.position.set(pos.x, 0.05, pos.z);
+    scene.add(body);
+
+    // Turret line
+    const turretPts = [new THREE.Vector3(0, 0, 0), new THREE.Vector3(0.3, 0, 0)];
+    const turretGeo = new THREE.BufferGeometry().setFromPoints(turretPts);
+    const turret = new THREE.Line(turretGeo, new THREE.LineBasicMaterial({ color: 0x00ffaa }));
+    turret.position.set(pos.x, 0.06, pos.z);
+    scene.add(turret);
+
+    tanks.push({ body, turret, q: tp.q, r: tp.r, x: pos.x, z: pos.z });
+}
+
+/* ═══════════════════════════════════════════════
+   PLAYER SCOUTS (3 units with patrol paths)
+   ═══════════════════════════════════════════════ */
+const diamondGeo = new THREE.PlaneGeometry(0.2, 0.2);
+const scoutDefs = [
+    { waypoints: [{ q: -3, r: 4 }, { q: -4, r: 3 }, { q: -3, r: 2 }] },
+    { waypoints: [{ q: 4, r: 3 }, { q: 3, r: 2 }, { q: 4, r: 1 }] },
+    { waypoints: [{ q: 0, r: 4 }, { q: 1, r: 3 }, { q: -1, r: 3 }] },
+];
+const playerScouts = [];
+for (const sd of scoutDefs) {
+    const mesh = new THREE.Mesh(diamondGeo, new THREE.MeshBasicMaterial({ color: 0x00ff88, side: THREE.DoubleSide }));
+    mesh.rotation.x = -Math.PI / 2;
+    mesh.rotation.z = Math.PI / 4;
+    mesh.position.y = 0.05;
+    scene.add(mesh);
+
+    // Convert waypoints to world
+    const wpWorld = sd.waypoints.map(w => hexToWorld(w.q, w.r));
+
+    // Trail line (fading)
+    const trailMax = 30;
+    const trailPositions = new Float32Array(trailMax * 3);
+    const trailGeo = new THREE.BufferGeometry();
+    trailGeo.setAttribute('position', new THREE.BufferAttribute(trailPositions, 3));
+    trailGeo.setDrawRange(0, 0);
+    const trailMat = new THREE.LineBasicMaterial({ color: 0x00ff88, transparent: true, opacity: 0.3 });
+    const trailLine = new THREE.Line(trailGeo, trailMat);
+    scene.add(trailLine);
+
+    playerScouts.push({
+        mesh, waypoints: wpWorld, trailLine, trailPositions, trailCount: 0, trailMax,
+        progress: Math.random(), segIndex: 0, speed: 0.15 + Math.random() * 0.05,
+    });
+}
+
+/* ═══════════════════════════════════════════════
+   ENEMY HEAVIES (3 units) - larger red hexagons
+   ═══════════════════════════════════════════════ */
+const enemyHeavyShape = createHexShape(0.3);
+const enemyHeavyGeo = new THREE.ShapeGeometry(enemyHeavyShape);
+const enemyHeavies = [];
+const heavyDefs = [
+    { q: -2, r: -3, targetR: -1 },
+    { q: 1, r: -4, targetR: -2 },
+    { q: 3, r: -4, targetR: -2 },
+];
+for (const hd of heavyDefs) {
+    const pos = hexToWorld(hd.q, hd.r);
+    const mesh = new THREE.Mesh(enemyHeavyGeo, new THREE.MeshBasicMaterial({ color: 0xff4444, side: THREE.DoubleSide }));
+    mesh.rotation.x = -Math.PI / 2;
+    mesh.position.set(pos.x, 0.05, pos.z);
+    scene.add(mesh);
+    const targetPos = hexToWorld(hd.q, hd.targetR);
+    enemyHeavies.push({ mesh, startX: pos.x, startZ: pos.z, targetX: targetPos.x, targetZ: targetPos.z, speed: 0.03 + Math.random() * 0.02 });
+}
+
+/* ═══════════════════════════════════════════════
+   ENEMY SCOUTS (2 units) - red triangles
+   ═══════════════════════════════════════════════ */
+const triShape = new THREE.Shape();
+triShape.moveTo(0, 0.2);
+triShape.lineTo(-0.15, -0.1);
+triShape.lineTo(0.15, -0.1);
+triShape.closePath();
+const triGeo = new THREE.ShapeGeometry(triShape);
+
+const enemyScoutDefs = [
+    { waypoints: [{ q: -4, r: -4 }, { q: -5, r: -3 }, { q: -4, r: -2 }] },
+    { waypoints: [{ q: 5, r: -5 }, { q: 4, r: -4 }, { q: 5, r: -3 }] },
+];
+const enemyScouts = [];
+for (const esd of enemyScoutDefs) {
+    const mesh = new THREE.Mesh(triGeo, new THREE.MeshBasicMaterial({ color: 0xff4444, side: THREE.DoubleSide }));
+    mesh.rotation.x = -Math.PI / 2;
+    mesh.position.y = 0.05;
+    scene.add(mesh);
+    const wpWorld = esd.waypoints.map(w => hexToWorld(w.q, w.r));
+    enemyScouts.push({ mesh, waypoints: wpWorld, progress: Math.random(), segIndex: 0, speed: 0.12 });
+}
+
+/* ═══════════════════════════════════════════════
+   COMBAT: ENGAGEMENT LINES (drone-to-target beams)
+   ═══════════════════════════════════════════════ */
+// Pre-create line pools for engagement beams
+const MAX_BEAMS = 40;
+const beamPool = [];
+const beamMat = new THREE.LineBasicMaterial({ color: 0x00ff88, transparent: true, opacity: 0.3 });
+const enemyBeamMat = new THREE.LineBasicMaterial({ color: 0xff4444, transparent: true, opacity: 0.3 });
+
+for (let i = 0; i < MAX_BEAMS; i++) {
+    const pts = [new THREE.Vector3(), new THREE.Vector3()];
+    const geo = new THREE.BufferGeometry().setFromPoints(pts);
+    const mat = (i < 20 ? beamMat : enemyBeamMat).clone();
+    const line = new THREE.Line(geo, mat);
+    line.visible = false;
+    scene.add(line);
+    beamPool.push({ line, geo, isEnemy: i >= 20 });
+}
+
+/* ═══════════════════════════════════════════════
+   SWARM ATTACK PATTERN VISUALS
+   ═══════════════════════════════════════════════ */
+// Attack arc for attacking swarm
+const arcGeo = new THREE.RingGeometry(0.8, 1.8, 16, 1, -Math.PI / 3, Math.PI * 2 / 3);
+const attackArc = new THREE.Mesh(arcGeo, new THREE.MeshBasicMaterial({
+    color: 0x00ff88, transparent: true, opacity: 0.06, side: THREE.DoubleSide
+}));
+attackArc.rotation.x = -Math.PI / 2;
+attackArc.position.y = 0.015;
+scene.add(attackArc);
+
+// Converge circles (tightening)
+const convergeRings = [];
+for (let i = 0; i < 3; i++) {
+    const rGeo = new THREE.RingGeometry(0.3 + i * 0.4, 0.35 + i * 0.4, 32);
+    const ring = new THREE.Mesh(rGeo, new THREE.MeshBasicMaterial({
+        color: 0x00ff88, transparent: true, opacity: 0.08, side: THREE.DoubleSide
+    }));
+    ring.rotation.x = -Math.PI / 2;
+    ring.position.y = 0.015;
+    scene.add(ring);
+    convergeRings.push(ring);
+}
+
+// Enemy attack arc
+const enemyArcGeo = new THREE.RingGeometry(0.8, 1.8, 16, 1, -Math.PI / 3, Math.PI * 2 / 3);
+const enemyAttackArc = new THREE.Mesh(enemyArcGeo, new THREE.MeshBasicMaterial({
+    color: 0xff4444, transparent: true, opacity: 0.06, side: THREE.DoubleSide
+}));
+enemyAttackArc.rotation.x = -Math.PI / 2;
+enemyAttackArc.position.y = 0.015;
+scene.add(enemyAttackArc);
+
+/* ═══════════════════════════════════════════════
+   AOE IMPACT RINGS (pulsing at combat zones)
+   ═══════════════════════════════════════════════ */
+const impactRings = [];
+function createImpactRing(x, z, color) {
+    const rGeo = new THREE.RingGeometry(0.4, 0.5, 32);
+    const ring = new THREE.Mesh(rGeo, new THREE.MeshBasicMaterial({
+        color, transparent: true, opacity: 0.3, side: THREE.DoubleSide
+    }));
+    ring.rotation.x = -Math.PI / 2;
+    ring.position.set(x, 0.02, z);
+    scene.add(ring);
+    return ring;
+}
+
+// Impact at player swarm attack target
+const imp1Pos = hexToWorld(-1, -1);
+impactRings.push({ ring: createImpactRing(imp1Pos.x, imp1Pos.z, 0x00ff88), color: 'green' });
+// Impact at converge target
+const imp2Pos = hexToWorld(2, -1);
+impactRings.push({ ring: createImpactRing(imp2Pos.x, imp2Pos.z, 0x00ff88), color: 'green' });
+// Impact at enemy attack target
+const imp3Pos = hexToWorld(-1, 1);
+impactRings.push({ ring: createImpactRing(imp3Pos.x, imp3Pos.z, 0xff4444), color: 'red' });
+
+/* ═══════════════════════════════════════════════
+   MOVEMENT PATH VISUALIZATION (dashed lines)
+   ═══════════════════════════════════════════════ */
+const pathLines = [];
+
+function createDashedPath(fromX, fromZ, toX, toZ, color, wide) {
+    const pts = [];
+    const segs = 20;
+    for (let i = 0; i <= segs; i++) {
+        const t = i / segs;
+        pts.push(new THREE.Vector3(
+            fromX + (toX - fromX) * t, 0.04,
+            fromZ + (toZ - fromZ) * t
+        ));
+    }
+    const geo = new THREE.BufferGeometry().setFromPoints(pts);
+    const mat = new THREE.LineDashedMaterial({
+        color, dashSize: wide ? 0.5 : 0.3, gapSize: wide ? 0.3 : 0.2,
+        transparent: true, opacity: 0.6, linewidth: wide ? 2 : 1,
+    });
+    const line = new THREE.Line(geo, mat);
+    line.computeLineDistances();
+    scene.add(line);
+    return line;
+}
+
+// Swarm attack paths (wider)
+const sa1 = playerSwarms[1];
+pathLines.push(createDashedPath(sa1.centerX, sa1.centerZ, sa1.targetX, sa1.targetZ, 0x00ff88, true));
+const sa2 = playerSwarms[2];
+pathLines.push(createDashedPath(sa2.centerX, sa2.centerZ, sa2.targetX, sa2.targetZ, 0x00ff88, true));
+const ea1 = enemySwarms[0];
+pathLines.push(createDashedPath(ea1.centerX, ea1.centerZ, ea1.targetX, ea1.targetZ, 0xff4444, true));
+
+// Arrowheads at path ends
+function createArrowhead(x, z, dx, dz, color) {
+    const angle = Math.atan2(dz, dx);
+    const arrShape = new THREE.Shape();
+    arrShape.moveTo(0, 0.3);
+    arrShape.lineTo(-0.18, 0);
+    arrShape.lineTo(0.18, 0);
+    arrShape.closePath();
+    const mesh = new THREE.Mesh(
+        new THREE.ShapeGeometry(arrShape),
+        new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.7, side: THREE.DoubleSide })
+    );
+    mesh.rotation.x = -Math.PI / 2;
+    mesh.rotation.z = -angle + Math.PI / 2;
+    mesh.position.set(x, 0.04, z);
+    scene.add(mesh);
+    return mesh;
+}
+
+createArrowhead(sa1.targetX, sa1.targetZ, sa1.targetX - sa1.centerX, sa1.targetZ - sa1.centerZ, 0x00ff88);
+createArrowhead(sa2.targetX, sa2.targetZ, sa2.targetX - sa2.centerX, sa2.targetZ - sa2.centerZ, 0x00ff88);
+createArrowhead(ea1.targetX, ea1.targetZ, ea1.targetX - ea1.centerX, ea1.targetZ - ea1.centerZ, 0xff4444);
+
+// Enemy heavy movement paths
+for (const eh of enemyHeavies) {
+    pathLines.push(createDashedPath(eh.startX, eh.startZ, eh.targetX, eh.targetZ, 0xff4444, false));
+}
+
+/* ═══════════════════════════════════════════════
+   DEFENSE PERIMETER & SHIELD ZONES
+   ═══════════════════════════════════════════════ */
+// Fortified hexes forming the defense perimeter
+const fortifiedHexes = [
+    { q: -4, r: 7 }, { q: -2, r: 5 }, { q: 0, r: 4 },
+    { q: 3, r: 4 }, { q: 3, r: 6 }, { q: 0, r: 8 }, { q: -4, r: 7 }
+];
+
+const defPoints = fortifiedHexes.map(h => {
+    const p = hexToWorld(h.q, h.r);
+    return new THREE.Vector3(p.x, 0.03, p.z);
+});
+const defGeo = new THREE.BufferGeometry().setFromPoints(defPoints);
+const defLine = new THREE.Line(defGeo, new THREE.LineBasicMaterial({
+    color: 0x00ff88, transparent: true, opacity: 0.5, linewidth: 2
+}));
+scene.add(defLine);
+
+// Shield zones around fortified hexes
+const shieldZones = [];
+const shieldGeo = new THREE.CircleGeometry(1.5, 32);
+for (const fh of fortifiedHexes.slice(0, -1)) { // exclude repeated last
+    const pos = hexToWorld(fh.q, fh.r);
+    const shield = new THREE.Mesh(shieldGeo, new THREE.MeshBasicMaterial({
+        color: 0x00ff88, transparent: true, opacity: 0.05, side: THREE.DoubleSide
+    }));
+    shield.rotation.x = -Math.PI / 2;
+    shield.position.set(pos.x, 0.01, pos.z);
+    scene.add(shield);
+    shieldZones.push({ mesh: shield, x: pos.x, z: pos.z });
+}
+
+/* ═══════════════════════════════════════════════
+   RADAR SWEEP
+   ═══════════════════════════════════════════════ */
+const radarGroup = new THREE.Group();
+scene.add(radarGroup);
+
+const sweepLen = GRID_RADIUS * S * Math.sqrt(3);
+
+// Sweep line
+const sweepGeo = new THREE.BufferGeometry().setFromPoints([
+    new THREE.Vector3(0, 0.06, 0), new THREE.Vector3(sweepLen, 0.06, 0)
+]);
+const sweepLine = new THREE.Line(sweepGeo, new THREE.LineBasicMaterial({
+    color: 0x00ff88, transparent: true, opacity: 0.4
+}));
+radarGroup.add(sweepLine);
+
+// Sweep trail cone
+const sweepTrailGeo = new THREE.CircleGeometry(sweepLen, 32, 0, 0.25);
+const sweepTrail = new THREE.Mesh(sweepTrailGeo, new THREE.MeshBasicMaterial({
+    color: 0x00ff44, transparent: true, opacity: 0.05, side: THREE.DoubleSide
+}));
+sweepTrail.rotation.x = -Math.PI / 2;
+sweepTrail.position.y = 0.055;
+radarGroup.add(sweepTrail);
+
+// Radar center dot
+const radarDot = new THREE.Mesh(
+    new THREE.CircleGeometry(0.25, 16),
+    new THREE.MeshBasicMaterial({ color: 0x00ff88, side: THREE.DoubleSide })
+);
+radarDot.rotation.x = -Math.PI / 2;
+radarDot.position.y = 0.06;
+scene.add(radarDot);
+
+// Range rings
+for (let i = 1; i <= 3; i++) {
+    const ringR = (sweepLen / 3) * i;
+    const pts = Array.from({ length: 65 }, (_, j) => {
+        const a = (j / 64) * Math.PI * 2;
+        return new THREE.Vector3(Math.cos(a) * ringR, 0.055, Math.sin(a) * ringR);
+    });
+    const ring = new THREE.Line(
+        new THREE.BufferGeometry().setFromPoints(pts),
+        new THREE.LineBasicMaterial({ color: 0x00ff44, transparent: true, opacity: 0.07 })
+    );
+    scene.add(ring);
+}
+
+/* ═══════════════════════════════════════════════
+   KILL FEED (HTML overlay cycling messages)
+   ═══════════════════════════════════════════════ */
+const killFeedEl = document.getElementById('killFeed');
+const killMessages = [
+    { text: '[SWM-1] engaged [E-HVY-2] // SECTOR 4', cls: 'kill-green' },
+    { text: '[E-SWM-1] harassing [SCT-3] // FLANK', cls: 'kill-red' },
+    { text: '[SWM-2] destroyed [E-HVY-1] // CONFIRMED', cls: 'kill-green' },
+    { text: '[TNK-2] suppressing [E-SCT-1] // SECTOR 6', cls: 'kill-green' },
+    { text: '[E-SWM-2] repositioning // NORTH', cls: 'kill-red' },
+    { text: '[SWM-3] converging on [E-HVY-3] // PRIORITY', cls: 'kill-green' },
+    { text: '[E-HVY-2] neutralized // KIA', cls: 'kill-green' },
+    { text: '[E-SWM-1] breaching perimeter // WARNING', cls: 'kill-red' },
+    { text: '[SCT-1] recon complete // SECTOR 2 CLEAR', cls: 'kill-green' },
+    { text: '[SWM-1] 2 contacts neutralized // SECTOR 4', cls: 'kill-green' },
+];
+let killIndex = 0;
+const killFeedLines = [];
+const KILL_FEED_MAX = 4;
+
+function updateKillFeed() {
+    const msg = killMessages[killIndex % killMessages.length];
+    killFeedLines.push(msg);
+    if (killFeedLines.length > KILL_FEED_MAX) killFeedLines.shift();
+    killFeedEl.innerHTML = killFeedLines.map(m =>
+        `<div class="${m.cls}">&gt; ${m.text}</div>`
+    ).join('');
+    killIndex++;
+}
+updateKillFeed();
+setInterval(updateKillFeed, 3000);
+
+/* ═══════════════════════════════════════════════
+   TERMINAL MESSAGE CYCLING
+   ═══════════════════════════════════════════════ */
+const terminalEl = document.getElementById('terminal');
+const terminalMessages = [
+    'TACTICAL MAP // SWARM-1 ENGAGING SECTOR 4 // SWARM-3 CONVERGING // 2 CONTACTS NEUTRALIZED',
+    'ALERT // E-SWM-1 PUSHING CONTESTED ZONE // PERIMETER HOLDING // SHIELD ACTIVE',
+    'SWEEP COMPLETE // 24 HOSTILES TRACKED // THREAT LEVEL HIGH // ORDERS PENDING',
+    'SWM-2 RTB // REARM CYCLE 45s // TNK BATTERY NOMINAL // SCT PATROL ACTIVE',
+    'WARNING // SECTOR 4 HOT // MULTIPLE ENGAGEMENTS // AIR SUPPORT UNAVAILABLE',
+];
+let termMsgIdx = 0;
+setInterval(() => {
+    termMsgIdx = (termMsgIdx + 1) % terminalMessages.length;
+    terminalEl.innerHTML = terminalMessages[termMsgIdx] + '<span class="cursor">_</span>';
+}, 5000);
+
+/* ═══════════════════════════════════════════════
+   RESIZE
+   ═══════════════════════════════════════════════ */
+window.addEventListener('resize', () => {
+    aspect = window.innerWidth / window.innerHeight;
+    camera.left = frustum * aspect / -2;
+    camera.right = frustum * aspect / 2;
+    camera.top = frustum / 2;
+    camera.bottom = frustum / -2;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+/* ═══════════════════════════════════════════════
+   FPS TRACKING
+   ═══════════════════════════════════════════════ */
+let fc = 0, lt = performance.now();
+const statsEl = document.getElementById('stats');
+
+/* ═══════════════════════════════════════════════
+   ANIMATION LOOP
+   ═══════════════════════════════════════════════ */
+(function animate() {
+    requestAnimationFrame(animate);
+    const t = performance.now() * 0.001;
+    controls.update();
+
+    /* ── 1. SWARM DRONE MOVEMENT (the star) ── */
+    function updateSwarm(swarm, time) {
+        const cx = swarm.state === 'PATROL' ? swarm.centerX :
+                   (swarm.centerX + swarm.targetX) / 2;
+        const cz = swarm.state === 'PATROL' ? swarm.centerZ :
+                   (swarm.centerZ + swarm.targetZ) / 2;
+
+        for (let i = 0; i < swarm.drones.length; i++) {
+            const d = swarm.drones[i];
+            let dx, dz;
+
+            if (swarm.state === 'PATROL') {
+                // Orbit around center
+                const angle = time * d.orbitSpeed + d.phaseOffset;
+                dx = d.orbitRadius * Math.cos(angle);
+                dz = d.orbitRadius * Math.sin(angle);
+                // Wobble
+                dx += Math.sin(time * d.wobbleSpeed + d.phaseOffset) * 0.08;
+                dz += Math.cos(time * d.wobbleSpeed * 0.7 + d.phaseOffset) * 0.08;
+            } else if (swarm.state === 'ATTACK') {
+                // Spread into arc/crescent toward target
+                const dirX = swarm.targetX - swarm.centerX;
+                const dirZ = swarm.targetZ - swarm.centerZ;
+                const dirLen = Math.sqrt(dirX * dirX + dirZ * dirZ) || 1;
+                const ndx = dirX / dirLen, ndz = dirZ / dirLen;
+                // Perpendicular
+                const px = -ndz, pz = ndx;
+
+                const spreadAngle = ((i / swarm.drones.length) - 0.5) * Math.PI * 0.8;
+                const forward = 0.6 + Math.cos(spreadAngle) * 0.4;
+                const side = Math.sin(spreadAngle) * 1.2;
+
+                dx = ndx * forward * d.orbitRadius * 2 + px * side * d.orbitRadius;
+                dz = ndz * forward * d.orbitRadius * 2 + pz * side * d.orbitRadius;
+                // Wobble
+                dx += Math.sin(time * d.wobbleSpeed + d.phaseOffset) * 0.1;
+                dz += Math.cos(time * d.wobbleSpeed * 0.8 + d.phaseOffset) * 0.1;
+            } else if (swarm.state === 'CONVERGE') {
+                // Spiral inward toward target
+                const spiralAngle = time * d.orbitSpeed * 0.8 + d.phaseOffset;
+                const spiralR = d.orbitRadius * (0.3 + 0.7 * (0.5 + 0.5 * Math.sin(time * 0.5 + d.phaseOffset)));
+                const tx = swarm.targetX - swarm.centerX;
+                const tz = swarm.targetZ - swarm.centerZ;
+                dx = tx * 0.5 + spiralR * Math.cos(spiralAngle);
+                dz = tz * 0.5 + spiralR * Math.sin(spiralAngle);
+                dx += Math.sin(time * d.wobbleSpeed + d.phaseOffset) * 0.05;
+                dz += Math.cos(time * d.wobbleSpeed + d.phaseOffset) * 0.05;
+            }
+
+            d.mesh.position.x = swarm.centerX + dx;
+            d.mesh.position.z = swarm.centerZ + dz;
+        }
+    }
+
+    for (const sw of playerSwarms) updateSwarm(sw, t);
+    for (const sw of enemySwarms) updateSwarm(sw, t);
+
+    /* ── 2. ENGAGEMENT BEAMS (flickering attack lines) ── */
+    let beamIdx = 0;
+
+    function drawEngagementBeams(swarm, targets, isEnemy) {
+        for (const target of targets) {
+            const tPos = target.mesh ? target.mesh.position : target;
+            for (const drone of swarm.drones) {
+                if (beamIdx >= MAX_BEAMS) break;
+                const dx = drone.mesh.position.x - tPos.x;
+                const dz = drone.mesh.position.z - (tPos.z || tPos.position?.z || 0);
+                const dist = Math.sqrt(dx * dx + dz * dz);
+                if (dist > 5) continue; // only within range
+
+                const beam = beamPool[beamIdx];
+                const posArr = beam.geo.attributes.position.array;
+                posArr[0] = drone.mesh.position.x;
+                posArr[1] = 0.05;
+                posArr[2] = drone.mesh.position.z;
+                posArr[3] = tPos.x;
+                posArr[4] = 0.05;
+                posArr[5] = tPos.z !== undefined ? tPos.z : tPos.position.z;
+                beam.geo.attributes.position.needsUpdate = true;
+
+                // Fast flicker
+                const flicker = 0.3 + Math.sin(t * 8 + beamIdx * 1.7) * 0.3;
+                // Rapid appear/disappear
+                const visible = Math.sin(t * 12 + beamIdx * 2.3) > -0.2;
+                beam.line.material.opacity = flicker;
+                beam.line.material.color.setHex(isEnemy ? 0xff4444 : 0x00ff88);
+                beam.line.visible = visible;
+                beamIdx++;
+            }
+        }
+    }
+
+    // Player swarm 1 (ATTACK) engaging enemy heavies nearby
+    drawEngagementBeams(playerSwarms[1], enemyHeavies, false);
+    // Player swarm 2 (CONVERGE) engaging targets
+    drawEngagementBeams(playerSwarms[2], [{ mesh: { position: { x: ct1.x, z: ct1.z } } }], false);
+    // Enemy swarm 0 (ATTACK) engaging player positions
+    drawEngagementBeams(enemySwarms[0], [{ mesh: { position: { x: eat1.x, z: eat1.z } } }], true);
+
+    // Hide unused beams
+    for (let i = beamIdx; i < MAX_BEAMS; i++) {
+        beamPool[i].line.visible = false;
+    }
+
+    /* ── 3. IMPACT RING PULSING ── */
+    for (let i = 0; i < impactRings.length; i++) {
+        const ir = impactRings[i];
+        const pulse = 0.8 + Math.sin(t * 6 + i * 2) * 0.4;
+        ir.ring.scale.set(pulse, pulse, 1);
+        ir.ring.material.opacity = 0.15 + Math.sin(t * 8 + i) * 0.1;
+    }
+
+    /* ── 4. SCOUT PATROL + TRAILS ── */
+    function updatePatrol(scout, time, dt) {
+        const wp = scout.waypoints;
+        const segCount = wp.length;
+        scout.progress += scout.speed * 0.016; // ~60fps normalized
+        if (scout.progress >= 1) {
+            scout.progress -= 1;
+            scout.segIndex = (scout.segIndex + 1) % segCount;
+        }
+        const fromIdx = scout.segIndex;
+        const toIdx = (scout.segIndex + 1) % segCount;
+        const from = wp[fromIdx];
+        const to = wp[toIdx];
+        const tt = scout.progress;
+
+        const px = from.x + (to.x - from.x) * tt;
+        const pz = from.z + (to.z - from.z) * tt;
+        scout.mesh.position.x = px;
+        scout.mesh.position.z = pz;
+
+        // Update trail
+        const tp = scout.trailPositions;
+        // Shift existing positions
+        for (let i = Math.min(scout.trailCount, scout.trailMax - 1) - 1; i >= 0; i--) {
+            tp[(i + 1) * 3] = tp[i * 3];
+            tp[(i + 1) * 3 + 1] = tp[i * 3 + 1];
+            tp[(i + 1) * 3 + 2] = tp[i * 3 + 2];
+        }
+        tp[0] = px; tp[1] = 0.04; tp[2] = pz;
+        if (scout.trailCount < scout.trailMax) scout.trailCount++;
+        scout.trailLine.geometry.attributes.position.needsUpdate = true;
+        scout.trailLine.geometry.setDrawRange(0, scout.trailCount);
+    }
+
+    for (const sc of playerScouts) updatePatrol(sc, t, 0.016);
+
+    // Enemy scout patrol (simpler, no trails)
+    for (const es of enemyScouts) {
+        const wp = es.waypoints;
+        es.progress += es.speed * 0.016;
+        if (es.progress >= 1) { es.progress -= 1; es.segIndex = (es.segIndex + 1) % wp.length; }
+        const from = wp[es.segIndex];
+        const to = wp[(es.segIndex + 1) % wp.length];
+        es.mesh.position.x = from.x + (to.x - from.x) * es.progress;
+        es.mesh.position.z = from.z + (to.z - from.z) * es.progress;
+    }
+
+    /* ── 5. TANK TURRET ROTATION ── */
+    // Find nearest enemy-ish direction and rotate turrets
+    for (const tank of tanks) {
+        // Point turrets generally northward (toward enemy territory) with some tracking
+        let nearestDist = Infinity;
+        let nearestAngle = -Math.PI / 2; // default: north
+        for (const eh of enemyHeavies) {
+            const dx = eh.mesh.position.x - tank.x;
+            const dz = eh.mesh.position.z - tank.z;
+            const dist = Math.sqrt(dx * dx + dz * dz);
+            if (dist < nearestDist) {
+                nearestDist = dist;
+                nearestAngle = Math.atan2(dz, dx);
+            }
+        }
+        // Slow rotation
+        const currentRot = tank.turret.rotation.y || 0;
+        const targetRot = -nearestAngle;
+        tank.turret.rotation.y = currentRot + (targetRot - currentRot) * 0.02;
+    }
+
+    /* ── 6. RADAR SWEEP ── */
+    radarGroup.rotation.y = t * 0.4;
+    radarDot.material.opacity = 0.6 + Math.sin(t * 4) * 0.4;
+
+    /* ── 7. DEFENSE LINE PULSING ── */
+    defLine.material.opacity = 0.3 + Math.sin(t * 3) * 0.2;
+
+    /* ── 8. DAMAGED HEX FLICKERING ── */
+    for (let i = 0; i < damagedHexMeshes.length; i++) {
+        const dh = damagedHexMeshes[i];
+        const flick = 0.4 + Math.sin(t * 5.5 + i * 3.7) * 0.15 + Math.sin(t * 13 + i * 7) * 0.1;
+        dh.edges.material.opacity = flick * dh.fogFactor;
+    }
+    for (let i = 0; i < damageMarks.length; i++) {
+        damageMarks[i].material.opacity = 0.3 + Math.sin(t * 7 + i * 2) * 0.2;
+    }
+
+    /* ── Contested hex pulsing ── */
+    const contestPulse = 0.3 + Math.sin(t * 2.5) * 0.15;
+    for (const h of contestedHexes) {
+        if (!h.damaged) h.edges.material.opacity = contestPulse * h.fogFactor;
+    }
+
+    /* ── HQ ring pulsing ── */
+    playerHQRing.material.opacity = 0.4 + Math.sin(t * 2) * 0.2;
+    enemyHQRing.material.opacity = 0.4 + Math.sin(t * 2 + Math.PI) * 0.2;
+
+    /* ── Enemy heavies slow advance ── */
+    for (const eh of enemyHeavies) {
+        const frac = (Math.sin(t * eh.speed) * 0.5 + 0.5);
+        eh.mesh.position.x = eh.startX + (eh.targetX - eh.startX) * frac;
+        eh.mesh.position.z = eh.startZ + (eh.targetZ - eh.startZ) * frac;
+    }
+
+    /* ── Swarm attack pattern visuals ── */
+    // Attack arc follows attacking swarm direction
+    const aSw = playerSwarms[1];
+    const aDirX = aSw.targetX - aSw.centerX;
+    const aDirZ = aSw.targetZ - aSw.centerZ;
+    const aAngle = Math.atan2(aDirZ, aDirX);
+    attackArc.position.x = (aSw.centerX + aSw.targetX) / 2;
+    attackArc.position.z = (aSw.centerZ + aSw.targetZ) / 2;
+    attackArc.rotation.z = -aAngle;
+    attackArc.material.opacity = 0.04 + Math.sin(t * 3) * 0.02;
+
+    // Converge circles tighten
+    const cSw = playerSwarms[2];
+    for (let i = 0; i < convergeRings.length; i++) {
+        const phase = t * 1.5 + i * 0.8;
+        const scale = 0.5 + (1 + Math.sin(phase)) * 0.5;
+        convergeRings[i].scale.set(scale, scale, 1);
+        convergeRings[i].position.x = cSw.targetX;
+        convergeRings[i].position.z = cSw.targetZ;
+        convergeRings[i].material.opacity = 0.05 + Math.sin(phase) * 0.03;
+    }
+
+    // Enemy attack arc
+    const eaSw = enemySwarms[0];
+    const eaDirX = eaSw.targetX - eaSw.centerX;
+    const eaDirZ = eaSw.targetZ - eaSw.centerZ;
+    const eaAngle = Math.atan2(eaDirZ, eaDirX);
+    enemyAttackArc.position.x = (eaSw.centerX + eaSw.targetX) / 2;
+    enemyAttackArc.position.z = (eaSw.centerZ + eaSw.targetZ) / 2;
+    enemyAttackArc.rotation.z = -eaAngle;
+    enemyAttackArc.material.opacity = 0.04 + Math.sin(t * 3.5) * 0.02;
+
+    /* ── Shield zones: warn when enemy near ── */
+    for (const sz of shieldZones) {
+        let minEnemyDist = Infinity;
+        for (const eh of enemyHeavies) {
+            const dx = eh.mesh.position.x - sz.x;
+            const dz = eh.mesh.position.z - sz.z;
+            minEnemyDist = Math.min(minEnemyDist, Math.sqrt(dx * dx + dz * dz));
+        }
+        for (const es of enemySwarms) {
+            for (const d of es.drones) {
+                const dx = d.mesh.position.x - sz.x;
+                const dz = d.mesh.position.z - sz.z;
+                minEnemyDist = Math.min(minEnemyDist, Math.sqrt(dx * dx + dz * dz));
+            }
+        }
+        if (minEnemyDist < 8) {
+            const warning = Math.max(0, 1 - minEnemyDist / 8);
+            sz.mesh.material.opacity = 0.05 + warning * 0.1;
+            // Shift color toward orange/yellow
+            const r = 0 + warning * 1;
+            const g = 1 - warning * 0.3;
+            const b = 0.5 - warning * 0.5;
+            sz.mesh.material.color.setRGB(r * 0.5, g * 0.5, b * 0.2);
+        } else {
+            sz.mesh.material.opacity = 0.05;
+            sz.mesh.material.color.setHex(0x00ff88);
+        }
+    }
+
+    /* ── Path lines dash animation ── */
+    for (const pl of pathLines) {
+        pl.material.dashOffset = -t * 2;
+    }
+
+    /* ── FPS counter ── */
+    fc++;
+    const now = performance.now();
+    if (now - lt >= 1000) {
+        statsEl.textContent = fc + ' FPS | ' + allHexes.length + ' hexes | ' +
+            (playerSwarms.reduce((a, s) => a + s.drones.length, 0) + tanks.length + playerScouts.length +
+             enemySwarms.reduce((a, s) => a + s.drones.length, 0) + enemyHeavies.length + enemyScouts.length) + ' units';
+        fc = 0;
+        lt = now;
+    }
+
+    renderer.render(scene, camera);
+})();
+</script>
+</body>
+</html>

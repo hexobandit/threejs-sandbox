@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>05 — Swarm Formations</title>
+    <style>
+        *{margin:0;padding:0}body{overflow:hidden;background:#000;touch-action:none}canvas{display:block}
+        #ui{position:fixed;top:0;left:0;padding:12px;font-family:'Courier New',monospace;color:#fff;pointer-events:none;z-index:10}
+        #ui h1{font-size:14px;color:#00ff88;margin-bottom:4px}
+        #ui p{font-size:11px;color:#888;line-height:1.4;max-width:280px}
+        #stats{font-size:11px;color:#ffcc00;margin-top:8px}
+        #back{position:fixed;top:12px;right:12px;font-family:'Courier New',monospace;font-size:12px;color:#00ff88;text-decoration:none;z-index:10}
+    </style>
+</head>
+<body>
+<div id="ui">
+    <h1>05 / Swarm Formations</h1>
+    <p>Blue defends flag (circle) · Red attacks (wedge). Tests strategic readability from isometric view.</p>
+    <div id="stats">-- FPS · 18 cars</div>
+</div>
+<a id="back" href="../index.html">← back</a>
+<script type="importmap">
+{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"}}
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setClearColor(0x0d1117);
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+
+const frustum = 40;
+let aspect = window.innerWidth / window.innerHeight;
+const camera = new THREE.OrthographicCamera(
+    frustum * aspect / -2, frustum * aspect / 2,
+    frustum / 2, frustum / -2, 0.1, 200
+);
+camera.position.set(25, 30, 25);
+camera.lookAt(0, 0, 0);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.autoRotate = true;
+controls.autoRotateSpeed = 0.15;
+controls.maxPolarAngle = Math.PI / 2.1;
+controls.minZoom = 0.4;
+controls.maxZoom = 3;
+controls.addEventListener('start', () => controls.autoRotate = false);
+
+// --- Lighting (dramatic, night arena feel) ---
+scene.add(new THREE.AmbientLight(0x111122, 0.4));
+const spot = new THREE.DirectionalLight(0xaabbff, 0.8);
+spot.position.set(10, 30, 10);
+scene.add(spot);
+const warm = new THREE.DirectionalLight(0xff8844, 0.4);
+warm.position.set(-10, 15, -10);
+scene.add(warm);
+
+// --- Arena ground ---
+const ground = new THREE.Mesh(
+    new THREE.PlaneGeometry(80, 80),
+    new THREE.MeshLambertMaterial({ color: 0x1a2a1a })
+);
+ground.rotation.x = -Math.PI / 2;
+scene.add(ground);
+
+// Arena boundary (subtle ring)
+const boundary = new THREE.Mesh(
+    new THREE.RingGeometry(22, 23, 48),
+    new THREE.MeshBasicMaterial({ color: 0x334433, transparent: true, opacity: 0.4, side: THREE.DoubleSide })
+);
+boundary.rotation.x = -Math.PI / 2;
+boundary.position.y = 0.01;
+scene.add(boundary);
+
+// Grid lines for tactical feel
+const gridMat = new THREE.LineBasicMaterial({ color: 0x223322, transparent: true, opacity: 0.3 });
+for (let i = -20; i <= 20; i += 4) {
+    const pts1 = [new THREE.Vector3(i, 0.01, -20), new THREE.Vector3(i, 0.01, 20)];
+    const pts2 = [new THREE.Vector3(-20, 0.01, i), new THREE.Vector3(20, 0.01, i)];
+    scene.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts1), gridMat));
+    scene.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts2), gridMat));
+}
+
+// --- Flag (center) ---
+const pole = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.08, 0.08, 6, 8),
+    new THREE.MeshLambertMaterial({ color: 0xcccccc })
+);
+pole.position.y = 3;
+scene.add(pole);
+
+const flag = new THREE.Mesh(
+    new THREE.BoxGeometry(1.6, 1, 0.04),
+    new THREE.MeshLambertMaterial({ color: 0xffcc00, emissive: 0x664400, side: THREE.DoubleSide })
+);
+flag.position.set(0.8, 5.5, 0);
+scene.add(flag);
+
+// Flag glow ring
+const flagGlow = new THREE.Mesh(
+    new THREE.RingGeometry(1.5, 2, 32),
+    new THREE.MeshBasicMaterial({ color: 0xffcc00, transparent: true, opacity: 0.3, side: THREE.DoubleSide })
+);
+flagGlow.rotation.x = -Math.PI / 2;
+flagGlow.position.y = 0.03;
+scene.add(flagGlow);
+
+// --- Car factory ---
+function createCar(color) {
+    const g = new THREE.Group();
+    const body = new THREE.Mesh(
+        new THREE.BoxGeometry(0.85, 0.35, 1.6),
+        new THREE.MeshLambertMaterial({ color })
+    );
+    body.position.y = 0.25;
+    g.add(body);
+    const cabin = new THREE.Mesh(
+        new THREE.BoxGeometry(0.7, 0.25, 0.7),
+        new THREE.MeshLambertMaterial({ color: new THREE.Color(color).multiplyScalar(0.5) })
+    );
+    cabin.position.set(0, 0.55, 0.15);
+    g.add(cabin);
+    // Tiny headlights
+    const hlGeo = new THREE.BoxGeometry(0.12, 0.08, 0.02);
+    const hlMat = new THREE.MeshBasicMaterial({ color: 0xffffcc });
+    const hl1 = new THREE.Mesh(hlGeo, hlMat);
+    hl1.position.set(0.25, 0.25, -0.81);
+    g.add(hl1);
+    const hl2 = new THREE.Mesh(hlGeo, hlMat);
+    hl2.position.set(-0.25, 0.25, -0.81);
+    g.add(hl2);
+    return g;
+}
+
+// --- Blue team: defense circle (8 cars) ---
+const BLUE_COUNT = 8;
+const BLUE_RADIUS = 6;
+const blueCars = [];
+for (let i = 0; i < BLUE_COUNT; i++) {
+    const car = createCar(0x4488cc);
+    scene.add(car);
+    blueCars.push(car);
+}
+
+// Blue zone indicator
+const blueZone = new THREE.Mesh(
+    new THREE.RingGeometry(4, 8, 32),
+    new THREE.MeshBasicMaterial({ color: 0x2244aa, transparent: true, opacity: 0.12, side: THREE.DoubleSide })
+);
+blueZone.rotation.x = -Math.PI / 2;
+blueZone.position.y = 0.02;
+scene.add(blueZone);
+
+// --- Red team: attack wedge (10 cars) ---
+const RED_COUNT = 10;
+const redCars = [];
+// Wedge formation positions (relative to leader)
+const wedgeOffsets = [
+    [0, 0],        // leader
+    [-1.8, 2.2], [1.8, 2.2],    // row 2
+    [-3.6, 4.4], [0, 4.4], [3.6, 4.4],    // row 3
+    [-5.4, 6.6], [-1.8, 6.6], [1.8, 6.6], [5.4, 6.6],  // row 4
+];
+for (let i = 0; i < RED_COUNT; i++) {
+    const car = createCar(0xcc4444);
+    scene.add(car);
+    redCars.push(car);
+}
+
+// Red zone indicator (arrow shape)
+const arrowShape = new THREE.Shape();
+arrowShape.moveTo(0, 0);
+arrowShape.lineTo(-3, 5);
+arrowShape.lineTo(-1.5, 5);
+arrowShape.lineTo(-1.5, 10);
+arrowShape.lineTo(1.5, 10);
+arrowShape.lineTo(1.5, 5);
+arrowShape.lineTo(3, 5);
+arrowShape.closePath();
+
+const redZone = new THREE.Mesh(
+    new THREE.ShapeGeometry(arrowShape),
+    new THREE.MeshBasicMaterial({ color: 0xaa2222, transparent: true, opacity: 0.12, side: THREE.DoubleSide })
+);
+redZone.rotation.x = -Math.PI / 2;
+redZone.position.set(0, 0.02, -8);
+scene.add(redZone);
+
+// --- Movement direction arrows (small triangles on ground) ---
+function createArrow(color) {
+    const shape = new THREE.Shape();
+    shape.moveTo(0, 0);
+    shape.lineTo(-0.4, 0.8);
+    shape.lineTo(0.4, 0.8);
+    shape.closePath();
+    const mesh = new THREE.Mesh(
+        new THREE.ShapeGeometry(shape),
+        new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.5, side: THREE.DoubleSide })
+    );
+    mesh.rotation.x = -Math.PI / 2;
+    return mesh;
+}
+
+// Attack arrows pointing toward flag
+for (let i = 0; i < 5; i++) {
+    const arr = createArrow(0xcc4444);
+    arr.position.set(0, 0.03, -13 + i * 2);
+    scene.add(arr);
+}
+
+// --- Resize ---
+window.addEventListener('resize', () => {
+    aspect = window.innerWidth / window.innerHeight;
+    camera.left = frustum * aspect / -2;
+    camera.right = frustum * aspect / 2;
+    camera.top = frustum / 2;
+    camera.bottom = frustum / -2;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+// --- FPS ---
+let fc = 0, lt = performance.now();
+const statsEl = document.getElementById('stats');
+
+// --- Animate ---
+(function animate() {
+    requestAnimationFrame(animate);
+    const t = performance.now() * 0.001;
+    controls.update();
+
+    // Blue team: orbit around flag
+    for (let i = 0; i < BLUE_COUNT; i++) {
+        const angle = (i / BLUE_COUNT) * Math.PI * 2 + t * 0.3;
+        const x = Math.cos(angle) * BLUE_RADIUS;
+        const z = Math.sin(angle) * BLUE_RADIUS;
+        blueCars[i].position.set(x, 0, z);
+        // Face tangent direction (90° from radius)
+        const tx = Math.cos(angle + Math.PI / 2);
+        const tz = Math.sin(angle + Math.PI / 2);
+        blueCars[i].lookAt(x + tx, 0, z + tz);
+    }
+
+    // Red team: approach from south, oscillate
+    const approach = Math.sin(t * 0.2) * 3; // slow back-and-forth
+    for (let i = 0; i < RED_COUNT; i++) {
+        const [ox, oz] = wedgeOffsets[i];
+        const baseZ = -14 + approach;
+        redCars[i].position.set(ox, 0, baseZ + oz);
+        redCars[i].lookAt(ox, 0, baseZ + oz - 2); // face forward (toward flag)
+    }
+
+    // Red zone follows formation
+    redZone.position.z = -14 + approach + 1;
+
+    // Pulsing effects
+    flagGlow.material.opacity = 0.2 + Math.sin(t * 2) * 0.15;
+    flagGlow.scale.setScalar(1 + Math.sin(t * 2) * 0.1);
+    blueZone.material.opacity = 0.08 + Math.sin(t * 1.5) * 0.05;
+    redZone.material.opacity = 0.08 + Math.sin(t * 1.5 + 1) * 0.05;
+
+    // Flag wave
+    flag.rotation.y = Math.sin(t * 3) * 0.2;
+
+    fc++;
+    const now = performance.now();
+    if (now - lt >= 1000) {
+        statsEl.textContent = fc + ' FPS · ' + (BLUE_COUNT + RED_COUNT) + ' cars · ' + renderer.info.render.calls + ' draws';
+        fc = 0; lt = now;
+    }
+    renderer.render(scene, camera);
+})();
+</script>
+</body>
+</html>

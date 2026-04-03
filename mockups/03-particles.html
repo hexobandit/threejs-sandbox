@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>03 — Particles &amp; Skids</title>
+    <style>
+        *{margin:0;padding:0}body{overflow:hidden;background:#000;touch-action:none}canvas{display:block}
+        #ui{position:fixed;top:0;left:0;padding:12px;font-family:'Courier New',monospace;color:#fff;pointer-events:none;z-index:10}
+        #ui h1{font-size:14px;color:#00ff88;margin-bottom:4px}
+        #ui p{font-size:11px;color:#888;line-height:1.4;max-width:280px}
+        #stats{font-size:11px;color:#ffcc00;margin-top:8px;line-height:1.6}
+        #back{position:fixed;top:12px;right:12px;font-family:'Courier New',monospace;font-size:12px;color:#00ff88;text-decoration:none;z-index:10}
+    </style>
+</head>
+<body>
+<div id="ui">
+    <h1>03 / Particles &amp; Skids</h1>
+    <p>Tire smoke (GPU points) + skid trails. Watch the FPS to gauge mobile particle budget.</p>
+    <div id="stats">-- FPS<br>0 particles</div>
+</div>
+<a id="back" href="../index.html">← back</a>
+<script type="importmap">
+{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"}}
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setClearColor(0x1a1a2e);
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+
+const frustum = 28;
+let aspect = window.innerWidth / window.innerHeight;
+const camera = new THREE.OrthographicCamera(
+    frustum * aspect / -2, frustum * aspect / 2,
+    frustum / 2, frustum / -2, 0.1, 200
+);
+camera.position.set(20, 20, 20);
+camera.lookAt(0, 0, 0);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.maxPolarAngle = Math.PI / 2.1;
+controls.minZoom = 0.5;
+controls.maxZoom = 3;
+
+scene.add(new THREE.HemisphereLight(0x334466, 0x222211, 0.6));
+const sun = new THREE.DirectionalLight(0xffffff, 0.9);
+sun.position.set(10, 25, 15);
+scene.add(sun);
+
+// --- Ground ---
+const ground = new THREE.Mesh(
+    new THREE.PlaneGeometry(60, 60),
+    new THREE.MeshLambertMaterial({ color: 0x3a5a2f })
+);
+ground.rotation.x = -Math.PI / 2;
+scene.add(ground);
+
+// --- Track circle ---
+const trackGeo = new THREE.RingGeometry(7, 13, 48);
+const trackMat = new THREE.MeshLambertMaterial({ color: 0x3d3d3d });
+const trackRing = new THREE.Mesh(trackGeo, trackMat);
+trackRing.rotation.x = -Math.PI / 2;
+trackRing.position.y = 0.02;
+scene.add(trackRing);
+
+// --- Cars (3 cars, different paths) ---
+function createCar(color) {
+    const g = new THREE.Group();
+    const body = new THREE.Mesh(
+        new THREE.BoxGeometry(0.85, 0.35, 1.6),
+        new THREE.MeshLambertMaterial({ color })
+    );
+    body.position.y = 0.25;
+    g.add(body);
+    const cabin = new THREE.Mesh(
+        new THREE.BoxGeometry(0.7, 0.25, 0.7),
+        new THREE.MeshLambertMaterial({ color: new THREE.Color(color).multiplyScalar(0.5) })
+    );
+    cabin.position.set(0, 0.55, 0.15);
+    g.add(cabin);
+    return g;
+}
+
+const cars = [
+    { mesh: createCar(0xcc4444), radius: 10, speed: 1.2, offset: 0 },
+    { mesh: createCar(0x4488bb), radius: 8.5, speed: 1.5, offset: 2.1 },
+    { mesh: createCar(0x44bb66), radius: 11.2, speed: 0.9, offset: 4.2 },
+];
+cars.forEach(c => scene.add(c.mesh));
+
+// --- Particle system (tire smoke) ---
+const POOL = 800;
+const posArr = new Float32Array(POOL * 3);
+const sizeArr = new Float32Array(POOL);
+const alphaArr = new Float32Array(POOL);
+
+const pGeo = new THREE.BufferGeometry();
+pGeo.setAttribute('position', new THREE.BufferAttribute(posArr, 3));
+pGeo.setAttribute('aSize', new THREE.BufferAttribute(sizeArr, 1));
+pGeo.setAttribute('aAlpha', new THREE.BufferAttribute(alphaArr, 1));
+
+const pMat = new THREE.ShaderMaterial({
+    vertexShader: `
+        attribute float aSize;
+        attribute float aAlpha;
+        varying float vAlpha;
+        void main() {
+            vAlpha = aAlpha;
+            vec4 mvPos = modelViewMatrix * vec4(position, 1.0);
+            gl_PointSize = aSize * 8.0;
+            gl_Position = projectionMatrix * mvPos;
+        }
+    `,
+    fragmentShader: `
+        varying float vAlpha;
+        void main() {
+            float d = length(gl_PointCoord - 0.5) * 2.0;
+            if (d > 1.0) discard;
+            gl_FragColor = vec4(0.85, 0.85, 0.85, vAlpha * (1.0 - d * d));
+        }
+    `,
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending
+});
+
+const points = new THREE.Points(pGeo, pMat);
+scene.add(points);
+
+// Particle pool data
+const pData = [];
+for (let i = 0; i < POOL; i++) {
+    pData.push({ x: 0, y: -100, z: 0, vx: 0, vy: 0, vz: 0, life: 0, size: 0 });
+}
+let nextP = 0;
+let aliveCount = 0;
+
+function emit(x, y, z) {
+    const p = pData[nextP];
+    p.x = x + (Math.random() - 0.5) * 0.3;
+    p.y = y;
+    p.z = z + (Math.random() - 0.5) * 0.3;
+    p.vx = (Math.random() - 0.5) * 0.8;
+    p.vy = 0.8 + Math.random() * 1.2;
+    p.vz = (Math.random() - 0.5) * 0.8;
+    p.life = 1.0;
+    p.size = 1.5 + Math.random() * 2;
+    nextP = (nextP + 1) % POOL;
+}
+
+function updateParticles(dt) {
+    aliveCount = 0;
+    for (let i = 0; i < POOL; i++) {
+        const p = pData[i];
+        if (p.life > 0) {
+            aliveCount++;
+            p.life -= dt * 0.7;
+            p.x += p.vx * dt;
+            p.y += p.vy * dt;
+            p.z += p.vz * dt;
+            p.vy *= 0.98;
+            const a = Math.max(p.life, 0);
+            posArr[i*3] = p.x;
+            posArr[i*3+1] = p.y;
+            posArr[i*3+2] = p.z;
+            sizeArr[i] = p.size * (1 + (1 - a) * 2); // grow as they age
+            alphaArr[i] = a * 0.5;
+        } else {
+            sizeArr[i] = 0;
+            alphaArr[i] = 0;
+        }
+    }
+    pGeo.attributes.position.needsUpdate = true;
+    pGeo.attributes.aSize.needsUpdate = true;
+    pGeo.attributes.aAlpha.needsUpdate = true;
+}
+
+// --- Skid trails (one Line per car) ---
+const MAX_TRAIL = 500;
+const trails = cars.map(() => {
+    const arr = new Float32Array(MAX_TRAIL * 3);
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(arr, 3));
+    geo.setDrawRange(0, 0);
+    const mat = new THREE.LineBasicMaterial({ color: 0x111111, transparent: true, opacity: 0.5 });
+    const line = new THREE.Line(geo, mat);
+    line.frustumCulled = false;
+    scene.add(line);
+    return { arr, geo, count: 0 };
+});
+
+function addTrailPoint(idx, x, z) {
+    const t = trails[idx];
+    if (t.count < MAX_TRAIL) {
+        t.arr[t.count * 3] = x;
+        t.arr[t.count * 3 + 1] = 0.03;
+        t.arr[t.count * 3 + 2] = z;
+        t.count++;
+        t.geo.setDrawRange(0, t.count);
+        t.geo.attributes.position.needsUpdate = true;
+    }
+}
+
+// --- Resize ---
+window.addEventListener('resize', () => {
+    aspect = window.innerWidth / window.innerHeight;
+    camera.left = frustum * aspect / -2;
+    camera.right = frustum * aspect / 2;
+    camera.top = frustum / 2;
+    camera.bottom = frustum / -2;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+// --- FPS ---
+let fc = 0, lt = performance.now(), prevTime = performance.now();
+const statsEl = document.getElementById('stats');
+
+// --- Animate ---
+(function animate() {
+    requestAnimationFrame(animate);
+    const now = performance.now();
+    const dt = Math.min((now - prevTime) / 1000, 0.05);
+    prevTime = now;
+    controls.update();
+
+    // Move cars
+    const time = now * 0.001;
+    cars.forEach((c, idx) => {
+        const a = time * c.speed + c.offset;
+        const x = Math.cos(a) * c.radius;
+        const z = Math.sin(a) * c.radius;
+        const nx = Math.cos(a + 0.05) * c.radius;
+        const nz = Math.sin(a + 0.05) * c.radius;
+
+        c.mesh.position.set(x, 0, z);
+        c.mesh.lookAt(nx, 0, nz);
+
+        // Emit smoke from rear
+        const rear = new THREE.Vector3(0, 0.2, 0.9).applyQuaternion(c.mesh.quaternion).add(c.mesh.position);
+        for (let i = 0; i < 3; i++) emit(rear.x, rear.y, rear.z);
+
+        // Skid trail
+        addTrailPoint(idx, x, z);
+    });
+
+    updateParticles(dt);
+
+    // FPS
+    fc++;
+    if (now - lt >= 1000) {
+        statsEl.innerHTML = fc + ' FPS<br>' + aliveCount + ' / ' + POOL + ' particles · ' + renderer.info.render.calls + ' draws';
+        fc = 0; lt = now;
+    }
+
+    renderer.render(scene, camera);
+})();
+</script>
+</body>
+</html>

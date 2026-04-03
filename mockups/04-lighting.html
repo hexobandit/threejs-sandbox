@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>04 — Lighting &amp; Mood</title>
+    <style>
+        *{margin:0;padding:0}body{overflow:hidden;background:#000;touch-action:none}canvas{display:block}
+        #ui{position:fixed;top:0;left:0;padding:12px;font-family:'Courier New',monospace;color:#fff;pointer-events:none;z-index:10}
+        #ui h1{font-size:14px;color:#00ff88;margin-bottom:4px}
+        #ui p{font-size:11px;color:#888;line-height:1.4;max-width:280px}
+        #stats{font-size:11px;color:#ffcc00;margin-top:8px}
+        #back{position:fixed;top:12px;right:12px;font-family:'Courier New',monospace;font-size:12px;color:#00ff88;text-decoration:none;z-index:10}
+    </style>
+</head>
+<body>
+<div id="ui">
+    <h1>04 / Lighting &amp; Mood</h1>
+    <p>Sunset atmosphere · shadow maps · fog. Shows visual polish ceiling on mobile WebGL.</p>
+    <div id="stats">-- FPS</div>
+</div>
+<a id="back" href="../index.html">← back</a>
+<script type="importmap">
+{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"}}
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setClearColor(0x1a0a2e);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 0.9;
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.fog = new THREE.FogExp2(0x220e08, 0.012);
+
+const frustum = 38;
+let aspect = window.innerWidth / window.innerHeight;
+const camera = new THREE.OrthographicCamera(
+    frustum * aspect / -2, frustum * aspect / 2,
+    frustum / 2, frustum / -2, 0.1, 200
+);
+camera.position.set(25, 25, 25);
+camera.lookAt(0, 0, 0);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.autoRotate = true;
+controls.autoRotateSpeed = 0.25;
+controls.maxPolarAngle = Math.PI / 2.1;
+controls.minZoom = 0.5;
+controls.maxZoom = 3;
+controls.addEventListener('start', () => controls.autoRotate = false);
+
+// --- Sunset lighting ---
+const hemi = new THREE.HemisphereLight(0xff6633, 0x112244, 0.5);
+scene.add(hemi);
+
+const sun = new THREE.DirectionalLight(0xff8844, 2.0);
+sun.position.set(-25, 10, 15);
+sun.castShadow = true;
+sun.shadow.mapSize.set(1024, 1024);
+sun.shadow.camera.left = -35;
+sun.shadow.camera.right = 35;
+sun.shadow.camera.top = 35;
+sun.shadow.camera.bottom = -35;
+sun.shadow.camera.near = 0.1;
+sun.shadow.camera.far = 80;
+sun.shadow.bias = -0.001;
+scene.add(sun);
+
+const fill = new THREE.DirectionalLight(0x224488, 0.3);
+fill.position.set(15, 10, -10);
+scene.add(fill);
+
+// --- Helpers ---
+function rrShape(w, h, r) {
+    const s = new THREE.Shape(), x = -w/2, y = -h/2;
+    s.moveTo(x+r,y); s.lineTo(x+w-r,y); s.quadraticCurveTo(x+w,y,x+w,y+r);
+    s.lineTo(x+w,y+h-r); s.quadraticCurveTo(x+w,y+h,x+w-r,y+h);
+    s.lineTo(x+r,y+h); s.quadraticCurveTo(x,y+h,x,y+h-r);
+    s.lineTo(x,y+r); s.quadraticCurveTo(x,y,x+r,y); return s;
+}
+
+// --- Ground ---
+const ground = new THREE.Mesh(
+    new THREE.PlaneGeometry(100, 100),
+    new THREE.MeshStandardMaterial({ color: 0x3a5a2f, roughness: 0.9 })
+);
+ground.rotation.x = -Math.PI / 2;
+ground.receiveShadow = true;
+scene.add(ground);
+
+// --- Track ---
+const ts = rrShape(32, 22, 6);
+ts.holes.push(new THREE.Path(rrShape(22, 12, 3).getPoints(40)));
+const trackMesh = new THREE.Mesh(
+    new THREE.ShapeGeometry(ts),
+    new THREE.MeshStandardMaterial({ color: 0x333333, roughness: 0.8 })
+);
+trackMesh.rotation.x = -Math.PI / 2;
+trackMesh.position.y = 0.03;
+trackMesh.receiveShadow = true;
+scene.add(trackMesh);
+
+// --- Buildings with shadows ---
+const bldgs = [
+    { p: [-20, -15], s: [5, 7, 4], c: 0x554433 },
+    { p: [-22, -7], s: [3, 5, 6], c: 0x443322 },
+    { p: [20, 14], s: [4, 9, 3], c: 0x554433 },
+    { p: [22, 8], s: [3, 6, 4], c: 0x665544 },
+    { p: [-19, 14], s: [6, 3.5, 3], c: 0x443322 },
+    { p: [19, -14], s: [3, 8, 5], c: 0x554433 },
+    { p: [0, -16], s: [8, 3, 3], c: 0x665544 },
+    { p: [0, 16], s: [12, 3, 3], c: 0x554433 },
+];
+bldgs.forEach(b => {
+    const m = new THREE.Mesh(
+        new THREE.BoxGeometry(b.s[0], b.s[1], b.s[2]),
+        new THREE.MeshStandardMaterial({ color: b.c, roughness: 0.7 })
+    );
+    m.position.set(b.p[0], b.s[1] / 2, b.p[1]);
+    m.castShadow = true;
+    m.receiveShadow = true;
+    scene.add(m);
+});
+
+// --- Parked cars (casting nice long shadows) ---
+function createCar(color, x, z, rot) {
+    const g = new THREE.Group();
+    const body = new THREE.Mesh(
+        new THREE.BoxGeometry(0.85, 0.35, 1.6),
+        new THREE.MeshStandardMaterial({ color, roughness: 0.4, metalness: 0.3 })
+    );
+    body.position.y = 0.25;
+    body.castShadow = true;
+    g.add(body);
+    const cabin = new THREE.Mesh(
+        new THREE.BoxGeometry(0.7, 0.25, 0.7),
+        new THREE.MeshStandardMaterial({ color: 0x222233, roughness: 0.3, metalness: 0.2 })
+    );
+    cabin.position.set(0, 0.55, 0.15);
+    cabin.castShadow = true;
+    g.add(cabin);
+    g.position.set(x, 0, z);
+    g.rotation.y = rot;
+    return g;
+}
+
+const carColors = [0xcc4444, 0x4488bb, 0xcc4444, 0x44bb66, 0x4488bb, 0xddaa33, 0xcc4444, 0x4488bb];
+const carPos = [
+    [13, -8, 0.3], [13, -6, 0.2], [13, -4, 0.35],
+    [-13, 7, 3.4], [-13, 5, 3.3], [-13, 3, 3.5],
+    [8, 11, 1.5], [-8, -11, 4.7],
+];
+carPos.forEach(([x, z, r], i) => {
+    scene.add(createCar(carColors[i % carColors.length], x, z, r));
+});
+
+// --- Trees with shadows ---
+function addTree(x, z, s = 1) {
+    const trunk = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.12*s, 0.18*s, 1*s, 6),
+        new THREE.MeshStandardMaterial({ color: 0x6B3513, roughness: 0.9 })
+    );
+    trunk.position.set(x, 0.5*s, z);
+    trunk.castShadow = true;
+    scene.add(trunk);
+    const crown = new THREE.Mesh(
+        new THREE.ConeGeometry(0.8*s, 1.8*s, 6),
+        new THREE.MeshStandardMaterial({ color: 0x1d4a0e, roughness: 0.8 })
+    );
+    crown.position.set(x, 1.6*s, z);
+    crown.castShadow = true;
+    scene.add(crown);
+}
+[[-5,3],[3,-2],[-2,4],[6,1],[0,-3],[-4,-4],[5,3],[-7,0],[4,-5]].forEach(([x,z]) => addTree(x, z, 0.8 + Math.random()*0.5));
+
+// --- Flag ---
+const pole = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.05, 0.05, 5, 8),
+    new THREE.MeshStandardMaterial({ color: 0x999999, metalness: 0.5 })
+);
+pole.position.y = 2.5;
+pole.castShadow = true;
+scene.add(pole);
+
+const flag = new THREE.Mesh(
+    new THREE.BoxGeometry(1.2, 0.7, 0.04),
+    new THREE.MeshStandardMaterial({ color: 0xffaa00, emissive: 0x553300, roughness: 0.5 })
+);
+flag.position.set(0.6, 4.5, 0);
+flag.castShadow = true;
+scene.add(flag);
+
+// --- Subtle ground glow (emissive plane near flag) ---
+const glow = new THREE.Mesh(
+    new THREE.CircleGeometry(3, 32),
+    new THREE.MeshBasicMaterial({ color: 0xff6600, transparent: true, opacity: 0.08 })
+);
+glow.rotation.x = -Math.PI / 2;
+glow.position.y = 0.04;
+scene.add(glow);
+
+// --- Resize ---
+window.addEventListener('resize', () => {
+    aspect = window.innerWidth / window.innerHeight;
+    camera.left = frustum * aspect / -2;
+    camera.right = frustum * aspect / 2;
+    camera.top = frustum / 2;
+    camera.bottom = frustum / -2;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+// --- FPS ---
+let fc = 0, lt = performance.now();
+const statsEl = document.getElementById('stats');
+
+// --- Animate ---
+(function animate() {
+    requestAnimationFrame(animate);
+    controls.update();
+
+    const t = performance.now() * 0.001;
+    flag.rotation.y = Math.sin(t * 2) * 0.2;
+    glow.material.opacity = 0.06 + Math.sin(t * 1.5) * 0.03;
+
+    // Slow sun movement for dynamic shadow creep
+    sun.position.x = -25 + Math.sin(t * 0.1) * 5;
+
+    fc++;
+    const now = performance.now();
+    if (now - lt >= 1000) {
+        statsEl.textContent = fc + ' FPS · shadows ' + renderer.shadowMap.type;
+        fc = 0; lt = now;
+    }
+    renderer.render(scene, camera);
+})();
+</script>
+</body>
+</html>

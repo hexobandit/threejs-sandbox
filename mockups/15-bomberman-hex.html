@@ -1,0 +1,833 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>15 / Bomberman Hex</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{overflow:hidden;background:#88bbee;touch-action:none;-webkit-touch-callout:none;-webkit-user-select:none;user-select:none}
+canvas{display:block}
+#ui{position:fixed;top:0;left:0;padding:12px;font-family:'Courier New',monospace;pointer-events:none;z-index:10}
+#badge{background:rgba(0,0,0,0.7);color:#fff;padding:6px 14px;border-radius:6px;font-size:14px;font-weight:bold;display:inline-block}
+#badge span{color:#ffcc00}
+#stats{font-size:11px;color:#fff;margin-top:4px;text-shadow:0 1px 3px rgba(0,0,0,0.5)}
+#back{position:fixed;top:12px;right:12px;font-family:'Courier New',monospace;font-size:12px;color:#fff;background:rgba(0,0,0,0.5);padding:4px 10px;border-radius:4px;text-decoration:none;z-index:10}
+#back:hover{background:rgba(0,0,0,0.7)}
+#bottom-bar{position:fixed;bottom:0;left:0;right:0;z-index:10;pointer-events:none;display:flex;flex-direction:column;align-items:center;padding:10px}
+#round-indicator{background:rgba(0,0,0,0.7);color:#ffcc00;font-family:'Courier New',monospace;font-size:13px;font-weight:bold;padding:4px 16px;border-radius:4px;margin-bottom:6px;letter-spacing:1px}
+#player-bar{background:rgba(0,0,0,0.75);color:#fff;font-family:'Courier New',monospace;font-size:12px;padding:8px 18px;border-radius:6px;display:flex;gap:16px;flex-wrap:wrap;justify-content:center}
+.p-status{display:flex;align-items:center;gap:4px}
+.p-color{display:inline-block;width:12px;height:12px;border-radius:2px;border:1px solid rgba(255,255,255,0.4)}
+.p-dead{opacity:0.45;text-decoration:line-through}
+</style>
+</head>
+<body>
+
+<div id="ui">
+  <div id="badge"><span>15</span> / BOMBERMAN HEX</div>
+  <div id="stats">FPS: --</div>
+</div>
+
+<a id="back" href="../index.html">&larr; back</a>
+
+<div id="bottom-bar">
+  <div id="round-indicator">ROUND 2 OF 3</div>
+  <div id="player-bar">
+    <div class="p-status"><span class="p-color" style="background:#ffffff"></span> P1: 3&#x1f4a3;</div>
+    <div class="p-status"><span class="p-color" style="background:#333333"></span> P2: 2&#x1f4a3;</div>
+    <div class="p-status p-dead"><span class="p-color" style="background:#ee4444"></span> P3: &#x2620; ELIMINATED</div>
+    <div class="p-status"><span class="p-color" style="background:#4488ee"></span> P4: 2&#x1f4a3;</div>
+  </div>
+</div>
+
+<script type="importmap">
+{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"}}
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+// ── RENDERER ──────────────────────────────────────────────────────
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setClearColor(0x88bbee);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+document.body.appendChild(renderer.domElement);
+
+// ── SCENE ─────────────────────────────────────────────────────────
+const scene = new THREE.Scene();
+
+// ── CAMERA (orthographic isometric) ───────────────────────────────
+const frustum = 25;
+let aspect = window.innerWidth / window.innerHeight;
+const camera = new THREE.OrthographicCamera(
+  frustum * aspect / -2, frustum * aspect / 2,
+  frustum / 2, frustum / -2, 0.1, 200
+);
+camera.position.set(20, 20, 20);
+camera.lookAt(0, 0, 0);
+
+// ── CONTROLS ──────────────────────────────────────────────────────
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.05;
+controls.autoRotate = true;
+controls.autoRotateSpeed = 0.3;
+controls.maxPolarAngle = Math.PI / 2.2;
+controls.minZoom = 0.5;
+controls.maxZoom = 3;
+controls.addEventListener('start', () => controls.autoRotate = false);
+controls.addEventListener('end', () => setTimeout(() => controls.autoRotate = true, 4000));
+
+// ── LIGHTING ──────────────────────────────────────────────────────
+const hemi = new THREE.HemisphereLight(0xaaddff, 0x886644, 0.8);
+scene.add(hemi);
+
+const dirLight = new THREE.DirectionalLight(0xffffff, 1.0);
+dirLight.position.set(10, 18, 8);
+dirLight.castShadow = true;
+dirLight.shadow.mapSize.set(2048, 2048);
+dirLight.shadow.camera.left = -20;
+dirLight.shadow.camera.right = 20;
+dirLight.shadow.camera.top = 20;
+dirLight.shadow.camera.bottom = -20;
+dirLight.shadow.camera.near = 0.5;
+dirLight.shadow.camera.far = 50;
+dirLight.shadow.bias = -0.001;
+scene.add(dirLight);
+
+const ambLight = new THREE.AmbientLight(0xffffff, 0.25);
+scene.add(ambLight);
+
+// ── HEX MATH (flat-top axial) ─────────────────────────────────────
+const HEX_RADIUS = 6;
+const HEX_SIZE = 1.0; // world-space radius of each hex
+
+function hexToWorld(q, r) {
+  const x = HEX_SIZE * (3/2 * q);
+  const z = HEX_SIZE * (Math.sqrt(3) * (r + q / 2));
+  return new THREE.Vector3(x, 0, z);
+}
+
+function hexDist(q1, r1, q2, r2) {
+  return (Math.abs(q1 - q2) + Math.abs(q1 + r1 - q2 - r2) + Math.abs(r1 - r2)) / 2;
+}
+
+const hexKey = (q, r) => `${q},${r}`;
+
+// hex directions (flat-top): 6 neighbors
+const hexDirs = [
+  {q:1,r:0},{q:0,r:1},{q:-1,r:1},{q:-1,r:0},{q:0,r:-1},{q:1,r:-1}
+];
+
+// ── ARENA LAYOUT ──────────────────────────────────────────────────
+// Classify every hex
+const HEX_OPEN = 0, HEX_WALL = 1, HEX_DESTRUCTIBLE = 2;
+const hexMap = new Map(); // key -> {q, r, type}
+
+// Spawn corners (axial coords for 4 corners — opposing pairs)
+const spawnCenters = [
+  {q: -5, r: 1},   // P1 top-left-ish
+  {q: 5, r: -1},   // P2 bottom-right-ish
+  {q: 1, r: -5},   // P3 top-right-ish
+  {q: -1, r: 5},   // P4 bottom-left-ish
+];
+const spawnColors = [0xffffff, 0x333333, 0xee4444, 0x4488ee];
+
+// Build set of spawn-safe hexes (2-hex radius from each spawn)
+const spawnSafe = new Set();
+spawnCenters.forEach(sc => {
+  for (let dq = -2; dq <= 2; dq++) {
+    for (let dr = -2; dr <= 2; dr++) {
+      if (hexDist(0, 0, dq, dr) <= 2) {
+        spawnSafe.add(hexKey(sc.q + dq, sc.r + dr));
+      }
+    }
+  }
+});
+
+// Generate all hexes in radius
+const allHexCoords = [];
+for (let q = -HEX_RADIUS; q <= HEX_RADIUS; q++) {
+  for (let r = -HEX_RADIUS; r <= HEX_RADIUS; r++) {
+    const s = -q - r;
+    if (Math.abs(s) <= HEX_RADIUS) {
+      allHexCoords.push({q, r});
+    }
+  }
+}
+
+// Classify hexes
+const rng = (function(seed) {
+  let s = seed;
+  return function() { s = (s * 16807 + 0) % 2147483647; return (s - 1) / 2147483646; };
+})(42);
+
+allHexCoords.forEach(({q, r}) => {
+  const dist = hexDist(0, 0, q, r);
+  const key = hexKey(q, r);
+
+  // Outer ring: indestructible wall
+  if (dist === HEX_RADIUS) {
+    hexMap.set(key, {q, r, type: HEX_WALL});
+    return;
+  }
+
+  // Interior alternating pattern: walls on certain hexes
+  // Classic Bomberman: walls at even-even positions on a grid
+  // For hex: place indestructible walls where q%3==0 and r%3==0 (but not on border)
+  if (dist > 0 && dist < HEX_RADIUS && q % 3 === 0 && r % 3 === 0 && !spawnSafe.has(key)) {
+    hexMap.set(key, {q, r, type: HEX_WALL});
+    return;
+  }
+
+  // Destructible blocks in some open spaces (not in spawn areas)
+  if (!spawnSafe.has(key) && dist > 0 && dist < HEX_RADIUS && rng() < 0.38) {
+    hexMap.set(key, {q, r, type: HEX_DESTRUCTIBLE});
+    return;
+  }
+
+  // Open
+  hexMap.set(key, {q, r, type: HEX_OPEN});
+});
+
+// Force-clear explosion paths (we'll mark some as destroyed)
+const explosionCenters = [
+  {q: -2, r: 0},
+  {q: 2, r: -1},
+];
+const destroyedByExplosion = new Set();
+explosionCenters.forEach(ec => {
+  // clear the center
+  hexMap.set(hexKey(ec.q, ec.r), {q: ec.q, r: ec.r, type: HEX_OPEN});
+  // clear along 6 directions, 2-3 hexes
+  hexDirs.forEach(d => {
+    for (let step = 1; step <= 3; step++) {
+      const nq = ec.q + d.q * step;
+      const nr = ec.r + d.r * step;
+      const nk = hexKey(nq, nr);
+      const h = hexMap.get(nk);
+      if (!h) continue;
+      if (h.type === HEX_WALL) break; // stop at indestructible
+      if (h.type === HEX_DESTRUCTIBLE) {
+        destroyedByExplosion.add(nk);
+        hexMap.set(nk, {q: nq, r: nr, type: HEX_OPEN});
+        break; // explosion stops after destroying a block
+      }
+    }
+  });
+});
+
+// ── MATERIALS ─────────────────────────────────────────────────────
+const matFloorOpen = new THREE.MeshLambertMaterial({color: 0x88cc66});
+const matFloorGrass = new THREE.MeshLambertMaterial({color: 0x557744});
+const matWall = new THREE.MeshLambertMaterial({color: 0x667788});
+const matWallDark = new THREE.MeshLambertMaterial({color: 0x556677});
+const matDestructible = new THREE.MeshLambertMaterial({color: 0xccaa77});
+const matDestructibleDark = new THREE.MeshLambertMaterial({color: 0xbb9966});
+
+// ── BUILD HEX FLOOR + BLOCKS ──────────────────────────────────────
+const hexGeo = new THREE.CylinderGeometry(HEX_SIZE * 0.92, HEX_SIZE * 0.92, 0.15, 6);
+hexGeo.rotateY(Math.PI / 6); // flat-top
+
+const blockGeo = new THREE.BoxGeometry(0.8, 0.8, 0.8);
+
+// Groups for organization
+const floorGroup = new THREE.Group();
+const blocksGroup = new THREE.Group();
+scene.add(floorGroup);
+scene.add(blocksGroup);
+
+// Power-up positions (where destroyed blocks were)
+const powerUpPositions = [];
+
+allHexCoords.forEach(({q, r}) => {
+  const key = hexKey(q, r);
+  const data = hexMap.get(key);
+  if (!data) return;
+  const pos = hexToWorld(q, r);
+
+  // Floor hex — always place one
+  const isGrass = (q + r) % 2 === 0;
+  const floorMat = isGrass ? matFloorGrass : matFloorOpen;
+
+  // Spawn area tinting
+  let mat = floorMat;
+  for (let si = 0; si < spawnCenters.length; si++) {
+    if (hexDist(q, r, spawnCenters[si].q, spawnCenters[si].r) <= 2) {
+      const c = new THREE.Color(spawnColors[si]);
+      const fc = new THREE.Color(floorMat.color);
+      fc.lerp(c, 0.3);
+      mat = new THREE.MeshLambertMaterial({color: fc});
+      break;
+    }
+  }
+
+  const floor = new THREE.Mesh(hexGeo, mat);
+  floor.position.set(pos.x, 0, pos.z);
+  floor.receiveShadow = true;
+  floorGroup.add(floor);
+
+  // Blocks on top
+  if (data.type === HEX_WALL) {
+    const wallMesh = new THREE.Mesh(blockGeo, (q + r) % 2 === 0 ? matWall : matWallDark);
+    wallMesh.position.set(pos.x, 0.55, pos.z);
+    wallMesh.castShadow = true;
+    wallMesh.receiveShadow = true;
+    blocksGroup.add(wallMesh);
+  } else if (data.type === HEX_DESTRUCTIBLE) {
+    const destMesh = new THREE.Mesh(blockGeo, (q + r) % 2 === 0 ? matDestructible : matDestructibleDark);
+    destMesh.position.set(pos.x, 0.55, pos.z);
+    destMesh.castShadow = true;
+    destMesh.receiveShadow = true;
+    blocksGroup.add(destMesh);
+  }
+
+  // Track destroyed positions for power-ups
+  if (destroyedByExplosion.has(key)) {
+    powerUpPositions.push({q, r, pos});
+  }
+});
+
+// ── PLAYER CHARACTER BUILDER ──────────────────────────────────────
+function createPlayer(color) {
+  const group = new THREE.Group();
+  const bodyMat = new THREE.MeshLambertMaterial({color});
+  const eyeMat = new THREE.MeshLambertMaterial({color: 0xffffff});
+  const pupilMat = new THREE.MeshLambertMaterial({color: 0x111111});
+
+  // Body
+  const body = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.5, 0.35), bodyMat);
+  body.position.y = 0.35;
+  body.castShadow = true;
+  group.add(body);
+
+  // Head
+  const head = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.3, 0.3), bodyMat);
+  head.position.y = 0.75;
+  head.castShadow = true;
+  group.add(head);
+
+  // Eyes
+  const eyeGeo = new THREE.BoxGeometry(0.07, 0.07, 0.04);
+  const eyeL = new THREE.Mesh(eyeGeo, eyeMat);
+  eyeL.position.set(-0.08, 0.78, 0.16);
+  group.add(eyeL);
+  const eyeR = new THREE.Mesh(eyeGeo, eyeMat);
+  eyeR.position.set(0.08, 0.78, 0.16);
+  group.add(eyeR);
+
+  // Pupils
+  const pupilGeo = new THREE.BoxGeometry(0.04, 0.04, 0.02);
+  const pupilL = new THREE.Mesh(pupilGeo, pupilMat);
+  pupilL.position.set(-0.08, 0.77, 0.185);
+  group.add(pupilL);
+  const pupilR = new THREE.Mesh(pupilGeo, pupilMat);
+  pupilR.position.set(0.08, 0.77, 0.185);
+  group.add(pupilR);
+
+  // Legs (two small boxes)
+  const legGeo = new THREE.BoxGeometry(0.12, 0.12, 0.14);
+  const legL = new THREE.Mesh(legGeo, bodyMat);
+  legL.position.set(-0.1, 0.06, 0);
+  legL.castShadow = true;
+  group.add(legL);
+  const legR = new THREE.Mesh(legGeo, bodyMat);
+  legR.position.set(0.1, 0.06, 0);
+  legR.castShadow = true;
+  group.add(legR);
+
+  // Shadow circle on ground
+  const shadowGeo = new THREE.CircleGeometry(0.25, 16);
+  const shadowMat = new THREE.MeshBasicMaterial({color: 0x000000, transparent: true, opacity: 0.18});
+  const shadow = new THREE.Mesh(shadowGeo, shadowMat);
+  shadow.rotation.x = -Math.PI / 2;
+  shadow.position.y = 0.09;
+  group.add(shadow);
+
+  return group;
+}
+
+// Place 4 players
+const players = [];
+
+// P1 White — running away from a bomb (slightly off-center from spawn)
+const p1 = createPlayer(0xffffff);
+const p1Start = hexToWorld(spawnCenters[0].q, spawnCenters[0].r);
+const p1BombHex = {q: spawnCenters[0].q + 2, r: spawnCenters[0].r};
+const p1Target = hexToWorld(spawnCenters[0].q - 1, spawnCenters[0].r + 1);
+p1.position.set(p1Start.x, 0, p1Start.z);
+p1.rotation.y = Math.atan2(p1Target.x - p1Start.x, p1Target.z - p1Start.z);
+scene.add(p1);
+players.push({mesh: p1, start: p1Start.clone(), target: p1Target.clone(), moving: true, phase: 0, bobOffset: 0});
+
+// P2 Black — placing a bomb
+const p2 = createPlayer(0x333333);
+const p2Pos = hexToWorld(spawnCenters[1].q - 1, spawnCenters[1].r);
+p2.position.set(p2Pos.x, 0, p2Pos.z);
+scene.add(p2);
+players.push({mesh: p2, moving: false, bobOffset: 0.5});
+
+// P3 Red — caught in explosion (flashing)
+const p3 = createPlayer(0xee4444);
+const p3Pos = hexToWorld(explosionCenters[0].q + 1, explosionCenters[0].r);
+p3.position.set(p3Pos.x, 0, p3Pos.z);
+scene.add(p3);
+players.push({mesh: p3, moving: false, bobOffset: 1.0, eliminated: true});
+
+// P4 Blue — near a power-up
+const p4Hex = {q: spawnCenters[3].q + 1, r: spawnCenters[3].r - 1};
+const p4 = createPlayer(0x4488ee);
+const p4Pos = hexToWorld(p4Hex.q, p4Hex.r);
+p4.position.set(p4Pos.x, 0, p4Pos.z);
+scene.add(p4);
+players.push({mesh: p4, moving: false, bobOffset: 1.5, collecting: true});
+
+// ── BOMBS ─────────────────────────────────────────────────────────
+const bombs = [];
+const bombGeo = new THREE.SphereGeometry(0.3, 12, 10);
+const bombMat = new THREE.MeshLambertMaterial({color: 0x222222});
+const fuseMat = new THREE.MeshBasicMaterial({color: 0xff8800, emissive: 0xff8800});
+
+function createBomb(q, r, hasCountdown) {
+  const group = new THREE.Group();
+  const pos = hexToWorld(q, r);
+  group.position.set(pos.x, 0.38, pos.z);
+
+  // Bomb sphere
+  const sphere = new THREE.Mesh(bombGeo, bombMat);
+  sphere.castShadow = true;
+  group.add(sphere);
+
+  // Fuse (tiny cylinder on top)
+  const fuse = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.15, 6), new THREE.MeshLambertMaterial({color: 0x888888}));
+  fuse.position.y = 0.32;
+  group.add(fuse);
+
+  // Fuse tip (glowing)
+  const fuseTip = new THREE.Mesh(new THREE.SphereGeometry(0.05, 6, 6), new THREE.MeshBasicMaterial({color: 0xff6600}));
+  fuseTip.position.y = 0.4;
+  group.add(fuseTip);
+
+  // Fuse point light
+  const fuseLight = new THREE.PointLight(0xff6600, 0.5, 3);
+  fuseLight.position.y = 0.4;
+  group.add(fuseLight);
+
+  // Countdown ring
+  let ring = null;
+  if (hasCountdown) {
+    const ringGeo = new THREE.RingGeometry(0.45, 0.5, 24);
+    ring = new THREE.Mesh(ringGeo, new THREE.MeshBasicMaterial({color: 0xff4444, side: THREE.DoubleSide, transparent: true, opacity: 0.8}));
+    ring.rotation.x = -Math.PI / 2;
+    ring.position.y = -0.25;
+    group.add(ring);
+  }
+
+  // Shadow
+  const shadowGeo = new THREE.CircleGeometry(0.3, 12);
+  const shadowMesh = new THREE.Mesh(shadowGeo, new THREE.MeshBasicMaterial({color: 0x000000, transparent: true, opacity: 0.15}));
+  shadowMesh.rotation.x = -Math.PI / 2;
+  shadowMesh.position.y = -0.28;
+  group.add(shadowMesh);
+
+  scene.add(group);
+  return {group, ring, fuseLight, fuseTip, phase: rng() * Math.PI * 2};
+}
+
+// 3 bombs placed
+bombs.push(createBomb(p1BombHex.q, p1BombHex.r, true));  // P1's bomb with countdown
+bombs.push(createBomb(spawnCenters[1].q - 1, spawnCenters[1].r, false)); // P2 placing
+bombs.push(createBomb(0, 3, false)); // Another bomb mid-field
+
+// ── EXPLOSIONS ────────────────────────────────────────────────────
+const explosionGroup = new THREE.Group();
+scene.add(explosionGroup);
+
+const explosionArms = []; // for animation
+const sparkParticles = []; // particle sparks
+
+function createExplosion(cq, cr, reach, opacity, isFresh) {
+  const centerPos = hexToWorld(cq, cr);
+
+  // Center hex fire
+  const fireMat = new THREE.MeshBasicMaterial({
+    color: isFresh ? 0xffaa22 : 0xff6622,
+    transparent: true,
+    opacity: opacity,
+  });
+  const fireGeo = new THREE.BoxGeometry(0.7, 0.3, 0.7);
+
+  const centerFire = new THREE.Mesh(fireGeo, fireMat.clone());
+  centerFire.position.set(centerPos.x, 0.25, centerPos.z);
+  explosionGroup.add(centerFire);
+
+  const armMeshes = [centerFire];
+
+  // Arms in 6 hex directions
+  hexDirs.forEach(d => {
+    for (let step = 1; step <= reach; step++) {
+      const aq = cq + d.q * step;
+      const ar = cr + d.r * step;
+      const ak = hexKey(aq, ar);
+      const h = hexMap.get(ak);
+      if (!h || h.type === HEX_WALL) break;
+
+      const armPos = hexToWorld(aq, ar);
+      const armFire = new THREE.Mesh(fireGeo, fireMat.clone());
+      armFire.position.set(armPos.x, 0.25, armPos.z);
+      explosionGroup.add(armFire);
+      armMeshes.push(armFire);
+    }
+  });
+
+  // Create sparks around center
+  const sparkGroup = new THREE.Group();
+  sparkGroup.position.set(centerPos.x, 0.5, centerPos.z);
+  const sparkMat = new THREE.MeshBasicMaterial({
+    color: 0xffdd44,
+    transparent: true,
+    opacity: 0.9,
+    blending: THREE.AdditiveBlending,
+  });
+  const sparkGeo = new THREE.BoxGeometry(0.06, 0.06, 0.06);
+
+  for (let i = 0; i < 20; i++) {
+    const spark = new THREE.Mesh(sparkGeo, sparkMat.clone());
+    const angle = rng() * Math.PI * 2;
+    const speed = 0.5 + rng() * 1.5;
+    const vy = 0.5 + rng() * 1.5;
+    spark.userData = {
+      vx: Math.cos(angle) * speed,
+      vz: Math.sin(angle) * speed,
+      vy: vy,
+      life: 1.0,
+      decay: 0.3 + rng() * 0.5,
+    };
+    sparkGroup.add(spark);
+    sparkParticles.push(spark);
+  }
+  explosionGroup.add(sparkGroup);
+
+  explosionArms.push({meshes: armMeshes, isFresh, baseOpacity: opacity});
+
+  // Point light for explosion
+  const expLight = new THREE.PointLight(isFresh ? 0xff8800 : 0xff4400, isFresh ? 2.0 : 0.8, 6);
+  expLight.position.set(centerPos.x, 1.5, centerPos.z);
+  explosionGroup.add(expLight);
+
+  return {light: expLight, meshes: armMeshes};
+}
+
+const exp1Data = createExplosion(explosionCenters[0].q, explosionCenters[0].r, 2, 0.9, true);
+const exp2Data = createExplosion(explosionCenters[1].q, explosionCenters[1].r, 3, 0.5, false);
+
+// ── DEBRIS PARTICLES (from destroyed blocks) ──────────────────────
+const debrisParticles = [];
+const debrisMat = new THREE.MeshLambertMaterial({color: 0xccaa77});
+const debrisGeo = new THREE.BoxGeometry(0.08, 0.08, 0.08);
+
+destroyedByExplosion.forEach(key => {
+  const [qq, rr] = key.split(',').map(Number);
+  const dp = hexToWorld(qq, rr);
+  for (let i = 0; i < 6; i++) {
+    const debris = new THREE.Mesh(debrisGeo, debrisMat);
+    const angle = rng() * Math.PI * 2;
+    const speed = 0.3 + rng() * 0.8;
+    debris.position.set(dp.x, 0.5 + rng() * 0.5, dp.z);
+    debris.userData = {
+      vx: Math.cos(angle) * speed,
+      vz: Math.sin(angle) * speed,
+      vy: 1.0 + rng() * 1.5,
+      gravity: -4.0,
+      life: 1.0,
+      decay: 0.4 + rng() * 0.3,
+    };
+    scene.add(debris);
+    debrisParticles.push(debris);
+  }
+});
+
+// ── POWER-UPS ─────────────────────────────────────────────────────
+const powerUps = [];
+
+function createPowerUp(type, q, r) {
+  const group = new THREE.Group();
+  const pos = hexToWorld(q, r);
+  group.position.set(pos.x, 0.4, pos.z);
+
+  // Glow ring on floor
+  const glowRingGeo = new THREE.RingGeometry(0.25, 0.35, 20);
+  const glowRingMat = new THREE.MeshBasicMaterial({
+    color: type === 'bomb' ? 0xff4444 : type === 'fire' ? 0xff8800 : type === 'speed' ? 0x4488ff : 0x44ff88,
+    transparent: true, opacity: 0.4, side: THREE.DoubleSide
+  });
+  const glowRing = new THREE.Mesh(glowRingGeo, glowRingMat);
+  glowRing.rotation.x = -Math.PI / 2;
+  glowRing.position.y = -0.3;
+  group.add(glowRing);
+
+  let icon;
+  if (type === 'bomb') {
+    // Small red sphere
+    icon = new THREE.Mesh(new THREE.SphereGeometry(0.12, 8, 6), new THREE.MeshLambertMaterial({color: 0xff4444, emissive: 0x441111}));
+  } else if (type === 'fire') {
+    // Small orange cone (flame)
+    icon = new THREE.Mesh(new THREE.ConeGeometry(0.1, 0.22, 6), new THREE.MeshLambertMaterial({color: 0xff8800, emissive: 0x442200}));
+  } else if (type === 'speed') {
+    // Small blue box (lightning bolt stand-in)
+    icon = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.2, 0.08), new THREE.MeshLambertMaterial({color: 0x4488ff, emissive: 0x112244}));
+  } else {
+    // Shield: green sphere with wireframe
+    icon = new THREE.Mesh(new THREE.SphereGeometry(0.12, 8, 6), new THREE.MeshLambertMaterial({color: 0x44ff88, emissive: 0x114422}));
+    const wireframe = new THREE.Mesh(
+      new THREE.SphereGeometry(0.16, 8, 6),
+      new THREE.MeshBasicMaterial({color: 0x88ffbb, wireframe: true, transparent: true, opacity: 0.5})
+    );
+    group.add(wireframe);
+    group.userData.wireframe = wireframe;
+  }
+  group.add(icon);
+
+  scene.add(group);
+  powerUps.push({group, icon, type, phase: rng() * Math.PI * 2, glowRing});
+  return group;
+}
+
+// Place 4 power-ups on destroyed block positions
+const puTypes = ['bomb', 'fire', 'speed', 'shield'];
+const usedPuPos = [];
+for (let i = 0; i < Math.min(4, powerUpPositions.length); i++) {
+  const pp = powerUpPositions[i];
+  createPowerUp(puTypes[i], pp.q, pp.r);
+  usedPuPos.push(pp);
+}
+// If not enough destroyed positions, place some on open hexes near explosions
+if (powerUps.length < 4) {
+  const extras = [
+    {q: explosionCenters[0].q + 2, r: explosionCenters[0].r - 1},
+    {q: explosionCenters[1].q - 1, r: explosionCenters[1].r + 2},
+    {q: 1, r: 2},
+    {q: -3, r: 2},
+  ];
+  for (let i = powerUps.length; i < 4; i++) {
+    const e = extras[i - powerUps.length] || extras[0];
+    createPowerUp(puTypes[i], e.q, e.r);
+  }
+}
+
+// Place the power-up near P4 for collection animation
+if (powerUps.length > 0) {
+  const puForP4 = powerUps[powerUps.length - 1];
+  const p4wp = hexToWorld(p4Hex.q, p4Hex.r);
+  puForP4.group.position.set(p4wp.x + 0.5, 0.4, p4wp.z);
+}
+
+// ── FPS COUNTER ───────────────────────────────────────────────────
+let frameCount = 0, lastFpsTime = performance.now(), fps = 0;
+const statsEl = document.getElementById('stats');
+
+// ── RESIZE ────────────────────────────────────────────────────────
+function onResize() {
+  const w = window.innerWidth, h = window.innerHeight;
+  aspect = w / h;
+  camera.left = frustum * aspect / -2;
+  camera.right = frustum * aspect / 2;
+  camera.top = frustum / 2;
+  camera.bottom = frustum / -2;
+  camera.updateProjectionMatrix();
+  renderer.setSize(w, h);
+}
+window.addEventListener('resize', onResize);
+
+// ── ANIMATION LOOP ────────────────────────────────────────────────
+const clock = new THREE.Clock();
+let prevTime = 0;
+
+function animate() {
+  requestAnimationFrame(animate);
+  const t = clock.getElapsedTime();
+  const dt = Math.min(t - prevTime, 0.05);
+  prevTime = t;
+
+  controls.update();
+
+  // --- Player idle bobbing ---
+  players.forEach((p, i) => {
+    const bob = Math.sin(t * 3 + p.bobOffset * 2) * 0.04;
+    if (!p.moving) {
+      p.mesh.position.y = bob;
+    }
+
+    // P1: moving away from bomb
+    if (i === 0 && p.moving) {
+      p.phase += dt * 1.2;
+      if (p.phase > 1) p.phase = 1;
+      const lerpX = p.start.x + (p.target.x - p.start.x) * p.phase;
+      const lerpZ = p.start.z + (p.target.z - p.start.z) * p.phase;
+      p.mesh.position.set(lerpX, bob + Math.sin(t * 8) * 0.03, lerpZ);
+      // Leg animation while moving
+      if (p.phase < 1) {
+        const legSwing = Math.sin(t * 12) * 0.15;
+        p.mesh.children[4].position.y = 0.06 + Math.abs(legSwing) * 0.1;
+        p.mesh.children[5].position.y = 0.06 + Math.abs(-legSwing) * 0.1;
+      }
+    }
+
+    // P3: flashing/transparent (eliminated)
+    if (p.eliminated) {
+      const flash = Math.sin(t * 8) * 0.5 + 0.5;
+      p.mesh.traverse(child => {
+        if (child.isMesh && child.material) {
+          if (!child.material._origTransparent) {
+            child.material = child.material.clone();
+            child.material.transparent = true;
+            child.material._origTransparent = true;
+          }
+          child.material.opacity = 0.3 + flash * 0.4;
+        }
+      });
+      p.mesh.position.y = bob * 2;
+    }
+
+    // P4: subtle reaching animation (collecting)
+    if (p.collecting) {
+      p.mesh.position.y = bob;
+      p.mesh.rotation.y = Math.sin(t * 2) * 0.2 + Math.PI * 0.25;
+    }
+  });
+
+  // --- Bomb pulsing ---
+  bombs.forEach(b => {
+    const pulse = 1 + Math.sin(t * 5 + b.phase) * 0.1;
+    b.group.scale.set(pulse, pulse, pulse);
+
+    // Fuse light flicker
+    b.fuseLight.intensity = 0.4 + Math.sin(t * 10 + b.phase) * 0.3;
+
+    // Countdown ring shrinking
+    if (b.ring) {
+      const shrink = 1 - ((t * 0.3) % 1);
+      b.ring.scale.set(shrink, shrink, 1);
+      b.ring.material.opacity = shrink * 0.8;
+    }
+  });
+
+  // --- Explosion pulsing ---
+  explosionArms.forEach(ea => {
+    ea.meshes.forEach(m => {
+      const intensity = ea.isFresh
+        ? 0.7 + Math.sin(t * 6) * 0.3
+        : 0.3 + Math.sin(t * 4) * 0.15;
+      m.material.opacity = intensity * ea.baseOpacity;
+      m.scale.y = 0.8 + Math.sin(t * 8) * 0.3;
+    });
+  });
+
+  // --- Spark particles ---
+  sparkParticles.forEach(s => {
+    if (s.userData.life <= 0) return;
+    s.userData.life -= dt * s.userData.decay;
+    s.position.x += s.userData.vx * dt;
+    s.position.z += s.userData.vz * dt;
+    s.position.y += s.userData.vy * dt;
+    s.userData.vy -= 3.0 * dt;
+    if (s.material.opacity !== undefined) {
+      s.material.opacity = Math.max(0, s.userData.life);
+    }
+    s.scale.setScalar(Math.max(0.1, s.userData.life));
+    if (s.userData.life <= 0) {
+      s.visible = false;
+    }
+  });
+
+  // Reset sparks periodically
+  if (Math.floor(t * 2) % 4 === 0 && Math.floor(t * 2) !== Math.floor((t - dt) * 2)) {
+    sparkParticles.forEach(s => {
+      if (s.userData.life <= 0) {
+        s.userData.life = 1.0;
+        s.position.set(0, 0, 0);
+        const angle = Math.random() * Math.PI * 2;
+        const speed = 0.5 + Math.random() * 1.5;
+        s.userData.vx = Math.cos(angle) * speed;
+        s.userData.vz = Math.sin(angle) * speed;
+        s.userData.vy = 0.5 + Math.random() * 1.5;
+        s.visible = true;
+        s.scale.setScalar(1);
+      }
+    });
+  }
+
+  // --- Debris particles ---
+  debrisParticles.forEach(d => {
+    if (d.userData.life <= 0) return;
+    d.userData.life -= dt * d.userData.decay;
+    d.position.x += d.userData.vx * dt;
+    d.position.z += d.userData.vz * dt;
+    d.position.y += d.userData.vy * dt;
+    d.userData.vy += d.userData.gravity * dt;
+    d.rotation.x += dt * 3;
+    d.rotation.z += dt * 2;
+    if (d.position.y < -0.5) {
+      d.userData.life = 0;
+      d.visible = false;
+    }
+    if (d.userData.life <= 0) {
+      d.visible = false;
+    }
+  });
+
+  // Reset debris periodically
+  if (Math.floor(t * 0.5) % 3 === 0 && Math.floor(t * 0.5) !== Math.floor((t - dt) * 0.5)) {
+    debrisParticles.forEach(d => {
+      if (d.userData.life <= 0) {
+        d.userData.life = 1.0;
+        const angle = Math.random() * Math.PI * 2;
+        const speed = 0.3 + Math.random() * 0.8;
+        d.userData.vx = Math.cos(angle) * speed;
+        d.userData.vz = Math.sin(angle) * speed;
+        d.userData.vy = 1.0 + Math.random() * 1.5;
+        d.position.y = 0.5;
+        d.visible = true;
+      }
+    });
+  }
+
+  // --- Power-up bobbing & rotating ---
+  powerUps.forEach(pu => {
+    const bob = Math.sin(t * 2.5 + pu.phase) * 0.08;
+    pu.group.position.y = 0.4 + bob;
+    pu.icon.rotation.y = t * 1.5;
+    if (pu.type === 'speed') {
+      pu.icon.rotation.z = Math.sin(t * 3) * 0.3;
+    }
+    // Glow ring pulse
+    pu.glowRing.material.opacity = 0.25 + Math.sin(t * 3 + pu.phase) * 0.15;
+
+    // Wireframe rotation for shield
+    if (pu.group.userData.wireframe) {
+      pu.group.userData.wireframe.rotation.y = t * 2;
+      pu.group.userData.wireframe.rotation.x = t * 1.2;
+    }
+  });
+
+  // --- FPS ---
+  frameCount++;
+  const now = performance.now();
+  if (now - lastFpsTime >= 500) {
+    fps = Math.round(frameCount / ((now - lastFpsTime) / 1000));
+    frameCount = 0;
+    lastFpsTime = now;
+    statsEl.textContent = `FPS: ${fps}`;
+  }
+
+  renderer.render(scene, camera);
+}
+
+animate();
+</script>
+</body>
+</html>
