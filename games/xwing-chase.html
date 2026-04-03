@@ -1,0 +1,1193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0,user-scalable=no,maximum-scale=1.0">
+<title>X-Wing Chase</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{width:100%;height:100%;overflow:hidden;background:#000;touch-action:none;-webkit-touch-callout:none;-webkit-user-select:none;user-select:none}
+canvas{display:block;width:100%;height:100%}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:0}}
+@keyframes slideIn{from{transform:translateX(-50%) translateY(-20px);opacity:0}to{transform:translateX(-50%) translateY(0);opacity:1}}
+</style>
+<script type="importmap">
+{"imports":{"three":"https://unpkg.com/three@0.160.0/build/three.module.js"}}
+</script>
+</head>
+<body>
+
+<!-- HUD -->
+<div id="score" style="position:fixed;top:12px;left:50%;transform:translateX(-50%);font-family:'Courier New',monospace;font-size:18px;color:#00ff88;z-index:10;pointer-events:none;text-shadow:0 0 10px #00ff8844">0</div>
+<div id="combo" style="position:fixed;top:36px;left:50%;transform:translateX(-50%);font-family:'Courier New',monospace;font-size:14px;color:#ffcc00;z-index:10;pointer-events:none;display:none;text-shadow:0 0 8px #ffcc0066">x2</div>
+<div id="healthbar" style="position:fixed;bottom:20px;left:50%;transform:translateX(-50%);width:200px;height:8px;background:#333;border:1px solid #555;border-radius:4px;z-index:10;pointer-events:none"><div id="healthfill" style="width:100%;height:100%;background:#00ff88;border-radius:3px;transition:width 0.2s"></div></div>
+<div id="shieldbar" style="position:fixed;bottom:34px;left:50%;transform:translateX(-50%);width:200px;height:4px;background:#222;border:1px solid #444;border-radius:2px;z-index:10;pointer-events:none"><div id="shieldfill" style="width:100%;height:100%;background:#4488ff;border-radius:1px;transition:width 0.3s"></div></div>
+<div id="wave" style="position:fixed;top:12px;right:12px;font-family:'Courier New',monospace;font-size:11px;color:#888;z-index:10;pointer-events:none">WAVE 1</div>
+<div id="fps" style="position:fixed;top:12px;left:12px;font-family:'Courier New',monospace;font-size:11px;color:#ffcc00;z-index:10;pointer-events:none">-- FPS</div>
+<a id="back" href="../index.html" style="position:fixed;top:30px;left:12px;font-family:'Courier New',monospace;font-size:11px;color:#00ff88;text-decoration:none;z-index:10">&larr; back</a>
+<div id="poweruptext" style="position:fixed;top:60px;left:50%;transform:translateX(-50%);font-family:'Courier New',monospace;font-size:13px;color:#fff;z-index:10;pointer-events:none;opacity:0;transition:opacity 0.3s"></div>
+
+<!-- Hit flash overlay -->
+<div id="hitflash" style="position:fixed;inset:0;background:red;opacity:0;z-index:5;pointer-events:none"></div>
+
+<!-- Game over screen -->
+<div id="gameover" style="position:fixed;inset:0;background:rgba(0,0,0,0.8);z-index:20;display:none;flex-direction:column;align-items:center;justify-content:center;font-family:'Courier New',monospace;color:#fff">
+<h1 style="font-size:32px;color:#ff4444;margin-bottom:12px">GAME OVER</h1>
+<p id="finalscore" style="font-size:18px;color:#00ff88;margin-bottom:8px">SCORE: 0</p>
+<p id="finalwave" style="font-size:14px;color:#888;margin-bottom:24px">WAVE 1</p>
+<p style="font-size:14px;color:#888;animation:blink 1s step-end infinite">TAP TO RESTART</p>
+</div>
+
+<!-- Start screen -->
+<div id="startscreen" style="position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:20;display:flex;flex-direction:column;align-items:center;justify-content:center;font-family:'Courier New',monospace;color:#fff">
+<h1 style="font-size:28px;color:#00ff88;margin-bottom:8px">X-WING CHASE</h1>
+<p style="font-size:12px;color:#888;margin-bottom:4px">DRAG TO FLY &middot; AUTO-FIRE</p>
+<p style="font-size:12px;color:#888;margin-bottom:24px">DOUBLE-TAP BOOST &middot; WASD/ARROWS</p>
+<p style="font-size:16px;color:#00ff88;animation:blink 1s step-end infinite">TAP TO START</p>
+</div>
+
+<script type="module">
+import * as THREE from 'three';
+
+// ─── CONSTANTS ───
+const BOUNDS_X = 4, BOUNDS_Y = 3;
+const PLAYER_Z = -5;
+const LERP_FACTOR = 0.08;
+const FIRE_INTERVAL = 0.25;
+const LASER_SPEED = 40;
+const ENEMY_LASER_SPEED = 18;
+const MAX_ENEMIES = 15;
+const MAX_PLAYER_LASERS = 40;
+const MAX_ENEMY_LASERS = 20;
+const MAX_ASTEROIDS = 12;
+const MAX_EXPLOSIONS = 60;
+const MAX_POWERUPS = 4;
+const MAX_EXHAUST = 80;
+const STAR_COUNT = 1500;
+const COMBO_TIMEOUT = 2.0;
+const SHIELD_REGEN_DELAY = 2.0;
+const SHIELD_REGEN_RATE = 1;
+const WAVE_INTERVAL = 15;
+
+// ─── STATE ───
+let gameState = 'START'; // START, PLAYING, GAME_OVER
+let score = 0, comboMultiplier = 1, comboTimer = 0;
+let playerHP = 100, playerShield = 50, maxShield = 50;
+let shieldRegenTimer = 0;
+let waveNumber = 1, waveTimer = 0, gameTime = 0;
+let fireTimer = 0, rapidFireTimer = 0;
+let invulnTimer = 0;
+let boostTimer = 0, boostCooldown = 0;
+let shakeTimer = 0, shakeIntensity = 0;
+let targetX = 0, targetY = 0;
+let currentFireInterval = FIRE_INTERVAL;
+
+// Touch state
+let touchActive = false, lastTapTime = 0;
+let keysDown = {};
+
+// FPS tracking
+let fpsFrames = 0, fpsTime = 0, fpsDisplay = 0;
+
+// ─── DOM REFS ───
+const $score = document.getElementById('score');
+const $combo = document.getElementById('combo');
+const $healthfill = document.getElementById('healthfill');
+const $shieldfill = document.getElementById('shieldfill');
+const $wave = document.getElementById('wave');
+const $fps = document.getElementById('fps');
+const $hitflash = document.getElementById('hitflash');
+const $gameover = document.getElementById('gameover');
+const $finalscore = document.getElementById('finalscore');
+const $finalwave = document.getElementById('finalwave');
+const $startscreen = document.getElementById('startscreen');
+const $poweruptext = document.getElementById('poweruptext');
+
+// ─── THREE.JS SETUP ───
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.2;
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x020208);
+scene.fog = new THREE.Fog(0x020208, 40, 70);
+
+const camera = new THREE.PerspectiveCamera(65, window.innerWidth / window.innerHeight, 0.1, 100);
+camera.position.set(0, 1.5, 2);
+camera.lookAt(0, 0, -10);
+
+const cameraBasePos = camera.position.clone();
+
+// Lighting
+const ambientLight = new THREE.AmbientLight(0x334466, 0.6);
+scene.add(ambientLight);
+const dirLight = new THREE.DirectionalLight(0xffeedd, 1.2);
+dirLight.position.set(5, 10, 5);
+scene.add(dirLight);
+const backLight = new THREE.DirectionalLight(0x4466aa, 0.4);
+backLight.position.set(-3, -2, -8);
+scene.add(backLight);
+
+// ─── MATERIALS (shared, reused) ───
+const matGrayLight = new THREE.MeshStandardMaterial({ color: 0xbbbbbb, roughness: 0.6, metalness: 0.3 });
+const matGrayDark = new THREE.MeshStandardMaterial({ color: 0x666666, roughness: 0.7, metalness: 0.4 });
+const matRed = new THREE.MeshStandardMaterial({ color: 0xaa2222, roughness: 0.5, metalness: 0.3 });
+const matRedDark = new THREE.MeshStandardMaterial({ color: 0x882222, roughness: 0.5, metalness: 0.3 });
+const matCyan = new THREE.MeshStandardMaterial({ color: 0x00ccff, emissive: 0x00ccff, emissiveIntensity: 2.0, roughness: 0.2 });
+const matGreenLaser = new THREE.MeshBasicMaterial({ color: 0x44ff44 });
+const matRedLaser = new THREE.MeshBasicMaterial({ color: 0xff2222 });
+const matAsteroid = new THREE.MeshStandardMaterial({ color: 0x665544, roughness: 0.9, metalness: 0.1 });
+const matExplosion = new THREE.MeshBasicMaterial({ color: 0xffaa33, transparent: true, opacity: 1.0 });
+const matPowerGreen = new THREE.MeshBasicMaterial({ color: 0x00ff66, transparent: true, opacity: 0.8 });
+const matPowerBlue = new THREE.MeshBasicMaterial({ color: 0x4488ff, transparent: true, opacity: 0.8 });
+const matPowerYellow = new THREE.MeshBasicMaterial({ color: 0xffcc00, transparent: true, opacity: 0.8 });
+const matWhiteFlash = new THREE.MeshBasicMaterial({ color: 0xffffff });
+const matExhaust = new THREE.MeshBasicMaterial({ color: 0x00ddff, transparent: true, opacity: 0.7 });
+
+// ─── GEOMETRIES (shared) ───
+const geoBox = new THREE.BoxGeometry(1, 1, 1);
+const geoSmallBox = new THREE.BoxGeometry(0.12, 0.12, 0.4);
+const geoLaser = new THREE.BoxGeometry(0.06, 0.06, 0.6);
+const geoEnemyLaser = new THREE.BoxGeometry(0.06, 0.06, 0.5);
+const geoSphere = new THREE.SphereGeometry(0.3, 6, 4);
+const geoPowerup = new THREE.OctahedronGeometry(0.25, 0);
+const geoExhaust = new THREE.BoxGeometry(0.06, 0.06, 0.15);
+
+// ─── BUILD PLAYER X-WING ───
+function buildXWing(scaleFactor = 1, tint = null) {
+    const group = new THREE.Group();
+    const bodyMat = tint || matGrayLight;
+    const darkMat = tint ? (tint === matRed ? matRedDark : matGrayDark) : matGrayDark;
+
+    // Fuselage
+    const fuselage = new THREE.Mesh(new THREE.BoxGeometry(0.35 * scaleFactor, 0.25 * scaleFactor, 1.8 * scaleFactor), bodyMat);
+    group.add(fuselage);
+
+    // Nose cone (tapered front)
+    const nose = new THREE.Mesh(new THREE.BoxGeometry(0.2 * scaleFactor, 0.15 * scaleFactor, 0.5 * scaleFactor), darkMat);
+    nose.position.z = -1.1 * scaleFactor;
+    group.add(nose);
+
+    // Cockpit
+    const cockpitMat = new THREE.MeshStandardMaterial({ color: 0x224466, roughness: 0.2, metalness: 0.8 });
+    const cockpit = new THREE.Mesh(new THREE.BoxGeometry(0.2 * scaleFactor, 0.12 * scaleFactor, 0.3 * scaleFactor), cockpitMat);
+    cockpit.position.set(0, 0.18 * scaleFactor, -0.4 * scaleFactor);
+    group.add(cockpit);
+
+    // Wings (4 in X configuration)
+    const wingGeo = new THREE.BoxGeometry(1.2 * scaleFactor, 0.04 * scaleFactor, 0.8 * scaleFactor);
+    const wingPositions = [
+        { x: 0.55 * scaleFactor, y: 0.22 * scaleFactor, rz: 0.2 },   // top-right
+        { x: -0.55 * scaleFactor, y: 0.22 * scaleFactor, rz: -0.2 },  // top-left
+        { x: 0.55 * scaleFactor, y: -0.22 * scaleFactor, rz: -0.2 },  // bottom-right
+        { x: -0.55 * scaleFactor, y: -0.22 * scaleFactor, rz: 0.2 },  // bottom-left
+    ];
+
+    const wingTips = [];
+    wingPositions.forEach(wp => {
+        const wing = new THREE.Mesh(wingGeo, bodyMat);
+        wing.position.set(wp.x, wp.y, 0.1 * scaleFactor);
+        wing.rotation.z = wp.rz;
+        group.add(wing);
+
+        // Engine pod at wing tip
+        const engine = new THREE.Mesh(new THREE.BoxGeometry(0.12 * scaleFactor, 0.12 * scaleFactor, 0.35 * scaleFactor), darkMat);
+        const tipX = wp.x + (wp.x > 0 ? 0.55 : -0.55) * scaleFactor;
+        const tipY = wp.y + (wp.y > 0 ? 0.1 : -0.1) * scaleFactor;
+        engine.position.set(tipX, tipY, 0.35 * scaleFactor);
+        group.add(engine);
+
+        // Engine glow
+        const glow = new THREE.Mesh(new THREE.BoxGeometry(0.1 * scaleFactor, 0.1 * scaleFactor, 0.08 * scaleFactor), matCyan);
+        glow.position.set(tipX, tipY, 0.56 * scaleFactor);
+        group.add(glow);
+
+        wingTips.push({ x: tipX, y: tipY, z: 0.56 * scaleFactor });
+    });
+
+    // Store wing tip positions for laser spawn and exhaust
+    group.userData.wingTips = wingTips;
+    group.userData.laserSpawns = wingPositions.map(wp => ({
+        x: wp.x + (wp.x > 0 ? 0.55 : -0.55) * scaleFactor,
+        y: wp.y + (wp.y > 0 ? 0.1 : -0.1) * scaleFactor,
+        z: -0.8 * scaleFactor
+    }));
+
+    return group;
+}
+
+// ─── BUILD BOMBER ───
+function buildBomber() {
+    const group = new THREE.Group();
+    // Wider box body
+    const body = new THREE.Mesh(new THREE.BoxGeometry(1.0, 0.5, 1.5), matRed);
+    group.add(body);
+    const wing1 = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.04, 0.6), matRedDark);
+    wing1.position.y = 0.1;
+    group.add(wing1);
+    const wing2 = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.04, 0.6), matRedDark);
+    wing2.position.y = -0.1;
+    group.add(wing2);
+    // Engine glows
+    const eg1 = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.15, 0.08), matCyan);
+    eg1.position.set(0.3, 0, 0.8);
+    group.add(eg1);
+    const eg2 = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.15, 0.08), matCyan);
+    eg2.position.set(-0.3, 0, 0.8);
+    group.add(eg2);
+    group.userData.wingTips = [{ x: 0.3, y: 0, z: 0.8 }, { x: -0.3, y: 0, z: 0.8 }];
+    group.userData.laserSpawns = [];
+    return group;
+}
+
+const playerShip = buildXWing();
+playerShip.position.set(0, 0, PLAYER_Z);
+scene.add(playerShip);
+
+// ─── STARFIELD ───
+const starGeometry = new THREE.BufferGeometry();
+const starPositions = new Float32Array(STAR_COUNT * 3);
+const starSpeeds = new Float32Array(STAR_COUNT);
+for (let i = 0; i < STAR_COUNT; i++) {
+    starPositions[i * 3] = (Math.random() - 0.5) * 60;
+    starPositions[i * 3 + 1] = (Math.random() - 0.5) * 40;
+    starPositions[i * 3 + 2] = -Math.random() * 70;
+    starSpeeds[i] = 3 + Math.random() * 7;
+}
+starGeometry.setAttribute('position', new THREE.BufferAttribute(starPositions, 3));
+const starMaterial = new THREE.PointsMaterial({ color: 0xffffff, size: 0.08, sizeAttenuation: true });
+const stars = new THREE.Points(starGeometry, starMaterial);
+scene.add(stars);
+
+// ─── OBJECT POOLS ───
+
+// Player lasers
+const playerLasers = [];
+for (let i = 0; i < MAX_PLAYER_LASERS; i++) {
+    const mesh = new THREE.Mesh(geoLaser, matGreenLaser);
+    mesh.visible = false;
+    scene.add(mesh);
+    playerLasers.push({ mesh, active: false, vz: 0 });
+}
+
+// Enemy lasers
+const enemyLasers = [];
+for (let i = 0; i < MAX_ENEMY_LASERS; i++) {
+    const mesh = new THREE.Mesh(geoEnemyLaser, matRedLaser);
+    mesh.visible = false;
+    scene.add(mesh);
+    enemyLasers.push({ mesh, active: false, vx: 0, vy: 0, vz: 0 });
+}
+
+// Pre-build enemy pool with variants
+const enemyPool = [];
+for (let i = 0; i < MAX_ENEMIES; i++) {
+    // We'll assign type dynamically, start with fighter model
+    const fighter = buildXWing(0.6, matRed);
+    fighter.visible = false;
+    scene.add(fighter);
+    const bomber = buildBomber();
+    bomber.visible = false;
+    scene.add(bomber);
+    const ace = buildXWing(0.45, matRed);
+    ace.visible = false;
+    scene.add(ace);
+    enemyPool.push({
+        models: { fighter, bomber, ace },
+        currentModel: null,
+        active: false,
+        type: 'fighter',
+        hp: 1,
+        maxHp: 1,
+        fireTimer: 0,
+        mineTimer: 0,
+        weaveOffset: 0,
+        weaveSpeed: 0,
+        startX: 0,
+        startY: 0,
+        speed: 0,
+        flashTimer: 0,
+        originalMaterials: null
+    });
+}
+
+// Asteroids
+const asteroids = [];
+for (let i = 0; i < MAX_ASTEROIDS; i++) {
+    const sx = 0.4 + Math.random() * 0.8;
+    const sy = 0.4 + Math.random() * 0.8;
+    const sz = 0.4 + Math.random() * 0.8;
+    const geo = new THREE.BoxGeometry(sx, sy, sz);
+    const mesh = new THREE.Mesh(geo, matAsteroid);
+    mesh.visible = false;
+    scene.add(mesh);
+    asteroids.push({ mesh, active: false, vx: 0, vy: 0, vz: 0, rotSpeed: new THREE.Vector3() });
+}
+
+// Explosion particles
+const explosionParticles = [];
+for (let i = 0; i < MAX_EXPLOSIONS; i++) {
+    const mesh = new THREE.Mesh(geoSphere, matExplosion.clone());
+    mesh.visible = false;
+    mesh.scale.setScalar(0.15);
+    scene.add(mesh);
+    explosionParticles.push({ mesh, active: false, vx: 0, vy: 0, vz: 0, life: 0 });
+}
+
+// Power-ups
+const powerups = [];
+const powerupMats = [matPowerGreen, matPowerBlue, matPowerYellow];
+for (let i = 0; i < MAX_POWERUPS; i++) {
+    const mesh = new THREE.Mesh(geoPowerup, matPowerGreen);
+    mesh.visible = false;
+    scene.add(mesh);
+    powerups.push({ mesh, active: false, type: 'health', vz: 0 });
+}
+
+// Exhaust particles
+const exhaustParticles = [];
+for (let i = 0; i < MAX_EXHAUST; i++) {
+    const mesh = new THREE.Mesh(geoExhaust, matExhaust.clone());
+    mesh.visible = false;
+    scene.add(mesh);
+    exhaustParticles.push({ mesh, active: false, life: 0, vx: 0, vy: 0, vz: 0 });
+}
+
+// Mines (from bombers)
+const mines = [];
+for (let i = 0; i < 10; i++) {
+    const mesh = new THREE.Mesh(new THREE.SphereGeometry(0.15, 6, 4), new THREE.MeshBasicMaterial({ color: 0xff3333, transparent: true, opacity: 0.8 }));
+    mesh.visible = false;
+    scene.add(mesh);
+    mines.push({ mesh, active: false, life: 0 });
+}
+
+// ─── SPAWN FUNCTIONS ───
+
+function spawnPlayerLaser() {
+    const tips = playerShip.userData.laserSpawns;
+    if (!tips) return;
+    for (const tip of tips) {
+        const laser = playerLasers.find(l => !l.active);
+        if (!laser) continue;
+        // Transform tip to world
+        const worldPos = new THREE.Vector3(tip.x, tip.y, tip.z);
+        playerShip.localToWorld(worldPos);
+        laser.mesh.position.copy(worldPos);
+        laser.mesh.visible = true;
+        laser.active = true;
+        laser.vz = -LASER_SPEED;
+    }
+}
+
+function spawnEnemyLaser(enemy) {
+    const laser = enemyLasers.find(l => !l.active);
+    if (!laser) return;
+    const model = enemy.currentModel;
+    if (!model) return;
+    laser.mesh.position.copy(model.position);
+    laser.mesh.position.z += 0.5;
+    laser.mesh.visible = true;
+    laser.active = true;
+    // Aim toward player
+    const dx = playerShip.position.x - laser.mesh.position.x;
+    const dy = playerShip.position.y - laser.mesh.position.y;
+    const dz = playerShip.position.z - laser.mesh.position.z;
+    const len = Math.sqrt(dx * dx + dy * dy + dz * dz);
+    laser.vx = (dx / len) * ENEMY_LASER_SPEED * 0.3;
+    laser.vy = (dy / len) * ENEMY_LASER_SPEED * 0.3;
+    laser.vz = (dz / len) * ENEMY_LASER_SPEED;
+}
+
+function spawnEnemy(type) {
+    const slot = enemyPool.find(e => !e.active);
+    if (!slot) return;
+
+    // Hide all models, show correct one
+    slot.models.fighter.visible = false;
+    slot.models.bomber.visible = false;
+    slot.models.ace.visible = false;
+
+    const model = slot.models[type];
+    model.visible = true;
+    slot.currentModel = model;
+    slot.active = true;
+    slot.type = type;
+    slot.flashTimer = 0;
+
+    const x = (Math.random() - 0.5) * 8;
+    const y = (Math.random() - 0.5) * 5;
+    model.position.set(x, y, -60);
+    model.rotation.set(0, Math.PI, 0); // face player
+
+    if (type === 'fighter') {
+        slot.hp = 1; slot.maxHp = 1;
+        slot.speed = 8 + Math.random() * 4;
+        slot.fireTimer = 1 + Math.random() * 2;
+    } else if (type === 'bomber') {
+        slot.hp = 3; slot.maxHp = 3;
+        slot.speed = 4 + Math.random() * 2;
+        slot.fireTimer = 999; // doesn't fire lasers
+        slot.mineTimer = 2 + Math.random() * 2;
+    } else { // ace
+        slot.hp = 2; slot.maxHp = 2;
+        slot.speed = 12 + Math.random() * 4;
+        slot.fireTimer = 0.4 + Math.random() * 0.6;
+        slot.weaveOffset = Math.random() * Math.PI * 2;
+        slot.weaveSpeed = 3 + Math.random() * 2;
+        slot.startX = x;
+        slot.startY = y;
+    }
+}
+
+function spawnAsteroid() {
+    const ast = asteroids.find(a => !a.active);
+    if (!ast) return;
+    ast.mesh.position.set(
+        (Math.random() - 0.5) * 12,
+        (Math.random() - 0.5) * 8,
+        -65 - Math.random() * 10
+    );
+    ast.mesh.visible = true;
+    ast.active = true;
+    ast.vz = 6 + Math.random() * 6;
+    ast.vx = (Math.random() - 0.5) * 0.5;
+    ast.vy = (Math.random() - 0.5) * 0.5;
+    ast.rotSpeed.set(
+        (Math.random() - 0.5) * 2,
+        (Math.random() - 0.5) * 2,
+        (Math.random() - 0.5) * 2
+    );
+    const s = 0.6 + Math.random() * 1.2;
+    ast.mesh.scale.set(s, s * (0.5 + Math.random()), s * (0.5 + Math.random()));
+}
+
+function spawnExplosion(x, y, z, count = 15) {
+    for (let i = 0; i < count; i++) {
+        const p = explosionParticles.find(ep => !ep.active);
+        if (!p) continue;
+        p.mesh.position.set(x, y, z);
+        p.mesh.visible = true;
+        p.active = true;
+        p.life = 0.5 + Math.random() * 0.4;
+        const speed = 3 + Math.random() * 5;
+        const theta = Math.random() * Math.PI * 2;
+        const phi = Math.random() * Math.PI;
+        p.vx = Math.sin(phi) * Math.cos(theta) * speed;
+        p.vy = Math.sin(phi) * Math.sin(theta) * speed;
+        p.vz = Math.cos(phi) * speed;
+        p.mesh.material.opacity = 1.0;
+        const s = 0.08 + Math.random() * 0.12;
+        p.mesh.scale.setScalar(s);
+    }
+}
+
+function spawnPowerup(x, y, z) {
+    const pu = powerups.find(p => !p.active);
+    if (!pu) return;
+    const types = ['health', 'rapid', 'shield'];
+    const r = Math.random();
+    pu.type = r < 0.4 ? 'health' : (r < 0.7 ? 'rapid' : 'shield');
+    pu.mesh.material = pu.type === 'health' ? matPowerGreen : (pu.type === 'rapid' ? matPowerBlue : matPowerYellow);
+    pu.mesh.position.set(x, y, z);
+    pu.mesh.visible = true;
+    pu.active = true;
+    pu.vz = 4;
+}
+
+function spawnMine(x, y, z) {
+    const mine = mines.find(m => !m.active);
+    if (!mine) return;
+    mine.mesh.position.set(x, y, z);
+    mine.mesh.visible = true;
+    mine.active = true;
+    mine.life = 8; // lingers for 8 seconds
+}
+
+function spawnExhaust() {
+    const tips = playerShip.userData.wingTips;
+    if (!tips) return;
+    for (const tip of tips) {
+        const p = exhaustParticles.find(ep => !ep.active);
+        if (!p) continue;
+        const worldPos = new THREE.Vector3(tip.x, tip.y, tip.z);
+        playerShip.localToWorld(worldPos);
+        p.mesh.position.copy(worldPos);
+        p.mesh.visible = true;
+        p.active = true;
+        const boostMult = boostTimer > 0 ? 2.5 : 1.0;
+        p.life = 0.15 * boostMult;
+        p.vz = (2 + Math.random() * 2) * boostMult;
+        p.vx = (Math.random() - 0.5) * 0.3;
+        p.vy = (Math.random() - 0.5) * 0.3;
+        p.mesh.material.opacity = boostTimer > 0 ? 0.9 : 0.6;
+        const s = boostTimer > 0 ? 0.12 : 0.06;
+        p.mesh.scale.setScalar(s);
+    }
+}
+
+// ─── COLLISION CHECK ───
+function checkCollision(a, b, radius) {
+    const dx = a.x - b.x;
+    const dy = a.y - b.y;
+    const dz = a.z - b.z;
+    return (dx * dx + dy * dy + dz * dz) < radius * radius;
+}
+
+// ─── DAMAGE PLAYER ───
+function damagePlayer(amount) {
+    if (invulnTimer > 0) return;
+    if (gameState !== 'PLAYING') return;
+
+    // Shield absorbs first
+    if (playerShield > 0) {
+        const absorbed = Math.min(playerShield, amount);
+        playerShield -= absorbed;
+        amount -= absorbed;
+    }
+    playerHP -= amount;
+    shieldRegenTimer = SHIELD_REGEN_DELAY;
+
+    // Hit flash
+    $hitflash.style.transition = 'none';
+    $hitflash.style.opacity = '0.3';
+    setTimeout(() => {
+        $hitflash.style.transition = 'opacity 0.15s';
+        $hitflash.style.opacity = '0';
+    }, 50);
+
+    // Screen shake
+    shakeTimer = 0.2;
+    shakeIntensity = amount > 15 ? 0.15 : 0.08;
+
+    if (playerHP <= 0) {
+        playerHP = 0;
+        gameOver();
+    }
+    updateHUD();
+}
+
+function gameOver() {
+    gameState = 'GAME_OVER';
+    spawnExplosion(playerShip.position.x, playerShip.position.y, playerShip.position.z, 20);
+    playerShip.visible = false;
+    $gameover.style.display = 'flex';
+    $finalscore.textContent = `SCORE: ${score}`;
+    $finalwave.textContent = `WAVE ${waveNumber}`;
+}
+
+function resetGame() {
+    score = 0; comboMultiplier = 1; comboTimer = 0;
+    playerHP = 100; playerShield = 50;
+    shieldRegenTimer = 0;
+    waveNumber = 1; waveTimer = 0; gameTime = 0;
+    fireTimer = 0; rapidFireTimer = 0;
+    invulnTimer = 0; boostTimer = 0; boostCooldown = 0;
+    shakeTimer = 0;
+    targetX = 0; targetY = 0;
+    currentFireInterval = FIRE_INTERVAL;
+
+    playerShip.position.set(0, 0, PLAYER_Z);
+    playerShip.rotation.set(0, 0, 0);
+    playerShip.visible = true;
+
+    // Deactivate all pools
+    playerLasers.forEach(l => { l.active = false; l.mesh.visible = false; });
+    enemyLasers.forEach(l => { l.active = false; l.mesh.visible = false; });
+    enemyPool.forEach(e => {
+        e.active = false;
+        e.models.fighter.visible = false;
+        e.models.bomber.visible = false;
+        e.models.ace.visible = false;
+    });
+    asteroids.forEach(a => { a.active = false; a.mesh.visible = false; });
+    explosionParticles.forEach(p => { p.active = false; p.mesh.visible = false; });
+    powerups.forEach(p => { p.active = false; p.mesh.visible = false; });
+    exhaustParticles.forEach(p => { p.active = false; p.mesh.visible = false; });
+    mines.forEach(m => { m.active = false; m.mesh.visible = false; });
+
+    updateHUD();
+}
+
+function updateHUD() {
+    $score.textContent = score;
+    $healthfill.style.width = `${playerHP}%`;
+    if (playerHP > 60) $healthfill.style.background = '#00ff88';
+    else if (playerHP > 30) $healthfill.style.background = '#ffcc00';
+    else $healthfill.style.background = '#ff4444';
+    $shieldfill.style.width = `${(playerShield / maxShield) * 100}%`;
+    $wave.textContent = `WAVE ${waveNumber}`;
+    if (comboMultiplier > 1) {
+        $combo.style.display = 'block';
+        $combo.textContent = `x${comboMultiplier}`;
+    } else {
+        $combo.style.display = 'none';
+    }
+}
+
+function showPowerupText(text) {
+    $poweruptext.textContent = text;
+    $poweruptext.style.opacity = '1';
+    setTimeout(() => { $poweruptext.style.opacity = '0'; }, 1500);
+}
+
+function triggerBoost() {
+    if (boostCooldown > 0) return;
+    boostTimer = 0.5;
+    boostCooldown = 3.0;
+    invulnTimer = Math.max(invulnTimer, 0.5);
+}
+
+// ─── SPAWN TIMERS ───
+let enemySpawnTimer = 0;
+let asteroidSpawnTimer = 0;
+let enemySpawnInterval = 1.0;
+let asteroidSpawnInterval = 2.0;
+
+function getDifficultyMultiplier() {
+    return Math.min(waveNumber / 10, 1.0);
+}
+
+// ─── INPUT HANDLING ───
+
+function screenToWorld(sx, sy) {
+    const nx = (sx / window.innerWidth) * 2 - 1;
+    const ny = -(sy / window.innerHeight) * 2 + 1;
+    return {
+        x: nx * BOUNDS_X,
+        y: ny * BOUNDS_Y
+    };
+}
+
+// Touch events — use document level so overlays don't block
+document.addEventListener('touchstart', e => {
+    e.preventDefault();
+    if (gameState === 'START') {
+        gameState = 'PLAYING';
+        $startscreen.style.display = 'none';
+        resetGame();
+        return;
+    }
+    if (gameState === 'GAME_OVER') {
+        $gameover.style.display = 'none';
+        gameState = 'PLAYING';
+        resetGame();
+        return;
+    }
+    const touch = e.touches[0];
+    const now = performance.now();
+    if (now - lastTapTime < 300) {
+        triggerBoost();
+    }
+    lastTapTime = now;
+    touchActive = true;
+    const w = screenToWorld(touch.clientX, touch.clientY);
+    targetX = w.x;
+    targetY = w.y;
+}, { passive: false });
+
+document.addEventListener('touchmove', e => {
+    e.preventDefault();
+    if (gameState !== 'PLAYING') return;
+    const touch = e.touches[0];
+    const w = screenToWorld(touch.clientX, touch.clientY);
+    targetX = w.x;
+    targetY = w.y;
+    touchActive = true;
+}, { passive: false });
+
+document.addEventListener('touchend', e => {
+    touchActive = false;
+}, { passive: false });
+
+// Mouse events
+document.addEventListener('mousemove', e => {
+    if (gameState !== 'PLAYING') return;
+    const w = screenToWorld(e.clientX, e.clientY);
+    targetX = w.x;
+    targetY = w.y;
+});
+
+document.addEventListener('click', e => {
+    if (e.target.closest('#back')) return; // don't block back link
+    if (gameState === 'START') {
+        gameState = 'PLAYING';
+        $startscreen.style.display = 'none';
+        resetGame();
+        return;
+    }
+    if (gameState === 'GAME_OVER') {
+        $gameover.style.display = 'none';
+        gameState = 'PLAYING';
+        resetGame();
+        return;
+    }
+    triggerBoost();
+});
+
+// Keyboard
+window.addEventListener('keydown', e => {
+    keysDown[e.key.toLowerCase()] = true;
+    if (e.key === ' ' || e.code === 'Space') {
+        e.preventDefault();
+        if (gameState === 'START') {
+            gameState = 'PLAYING';
+            $startscreen.style.display = 'none';
+            resetGame();
+        } else if (gameState === 'GAME_OVER') {
+            $gameover.style.display = 'none';
+            gameState = 'PLAYING';
+            resetGame();
+        } else {
+            triggerBoost();
+        }
+    }
+});
+window.addEventListener('keyup', e => { keysDown[e.key.toLowerCase()] = false; });
+
+// Resize
+window.addEventListener('resize', () => {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+// ─── MAIN GAME LOOP ───
+let lastTime = 0;
+const clock = new THREE.Clock();
+
+function update(dt) {
+    if (gameState !== 'PLAYING') return;
+    gameTime += dt;
+
+    // ─ Timers ─
+    fireTimer -= dt;
+    if (rapidFireTimer > 0) {
+        rapidFireTimer -= dt;
+        currentFireInterval = FIRE_INTERVAL / 2;
+    } else {
+        currentFireInterval = FIRE_INTERVAL;
+    }
+    if (invulnTimer > 0) invulnTimer -= dt;
+    if (boostTimer > 0) boostTimer -= dt;
+    if (boostCooldown > 0) boostCooldown -= dt;
+    if (shakeTimer > 0) shakeTimer -= dt;
+
+    // Shield regen
+    if (shieldRegenTimer > 0) {
+        shieldRegenTimer -= dt;
+    } else if (playerShield < maxShield) {
+        playerShield = Math.min(maxShield, playerShield + SHIELD_REGEN_RATE * dt);
+    }
+
+    // Combo timer
+    if (comboTimer > 0) {
+        comboTimer -= dt;
+        if (comboTimer <= 0) {
+            comboMultiplier = 1;
+        }
+    }
+
+    // Wave progression
+    waveTimer += dt;
+    if (waveTimer >= WAVE_INTERVAL) {
+        waveTimer -= WAVE_INTERVAL;
+        waveNumber = Math.min(waveNumber + 1, 10);
+    }
+
+    // Score survival bonus
+    score += Math.round(10 * dt);
+
+    // ─ Keyboard input ─
+    const kSpeed = 8 * dt;
+    if (keysDown['w'] || keysDown['arrowup']) targetY = Math.min(BOUNDS_Y, targetY + kSpeed);
+    if (keysDown['s'] || keysDown['arrowdown']) targetY = Math.max(-BOUNDS_Y, targetY - kSpeed);
+    if (keysDown['a'] || keysDown['arrowleft']) targetX = Math.max(-BOUNDS_X, targetX - kSpeed);
+    if (keysDown['d'] || keysDown['arrowright']) targetX = Math.min(BOUNDS_X, targetX + kSpeed);
+
+    // ─ Player movement ─
+    targetX = Math.max(-BOUNDS_X, Math.min(BOUNDS_X, targetX));
+    targetY = Math.max(-BOUNDS_Y, Math.min(BOUNDS_Y, targetY));
+
+    const prevX = playerShip.position.x;
+    const prevY = playerShip.position.y;
+    playerShip.position.x += (targetX - playerShip.position.x) * LERP_FACTOR;
+    playerShip.position.y += (targetY - playerShip.position.y) * LERP_FACTOR;
+    playerShip.position.z = PLAYER_Z;
+
+    // Bank into turns
+    const dx = playerShip.position.x - prevX;
+    const dy = playerShip.position.y - prevY;
+    playerShip.rotation.z += (-dx * 8 - playerShip.rotation.z) * 0.1;
+    playerShip.rotation.x += (dy * 3 - playerShip.rotation.x) * 0.1;
+
+    // Invuln flash
+    if (invulnTimer > 0) {
+        playerShip.visible = Math.floor(invulnTimer * 20) % 2 === 0;
+    } else {
+        playerShip.visible = true;
+    }
+
+    // ─ Auto-fire ─
+    if (fireTimer <= 0) {
+        spawnPlayerLaser();
+        fireTimer = currentFireInterval;
+    }
+
+    // ─ Exhaust ─
+    spawnExhaust();
+
+    // ─ Spawn enemies ─
+    const diff = getDifficultyMultiplier();
+    enemySpawnInterval = Math.max(0.3, 1.0 - diff * 0.7);
+    enemySpawnTimer -= dt;
+    if (enemySpawnTimer <= 0) {
+        enemySpawnTimer = enemySpawnInterval;
+        // Decide type
+        if (gameTime > 60 && Math.random() < 0.15) {
+            spawnEnemy('ace');
+        } else if (gameTime > 30 && Math.random() < 0.2) {
+            spawnEnemy('bomber');
+        } else {
+            spawnEnemy('fighter');
+        }
+    }
+
+    // ─ Spawn asteroids ─
+    asteroidSpawnInterval = Math.max(0.8, 2.0 - diff * 1.2);
+    asteroidSpawnTimer -= dt;
+    if (asteroidSpawnTimer <= 0) {
+        asteroidSpawnTimer = asteroidSpawnInterval;
+        spawnAsteroid();
+    }
+
+    // ─ Update player lasers ─
+    for (const laser of playerLasers) {
+        if (!laser.active) continue;
+        laser.mesh.position.z += laser.vz * dt;
+        if (laser.mesh.position.z < -70) {
+            laser.active = false;
+            laser.mesh.visible = false;
+        }
+    }
+
+    // ─ Update enemy lasers ─
+    for (const laser of enemyLasers) {
+        if (!laser.active) continue;
+        laser.mesh.position.x += laser.vx * dt;
+        laser.mesh.position.y += laser.vy * dt;
+        laser.mesh.position.z += laser.vz * dt;
+        if (laser.mesh.position.z > 10 || Math.abs(laser.mesh.position.x) > 15) {
+            laser.active = false;
+            laser.mesh.visible = false;
+        }
+    }
+
+    // ─ Update enemies ─
+    for (const enemy of enemyPool) {
+        if (!enemy.active) continue;
+        const model = enemy.currentModel;
+
+        if (enemy.type === 'ace') {
+            enemy.weaveOffset += enemy.weaveSpeed * dt;
+            model.position.x = enemy.startX + Math.sin(enemy.weaveOffset) * 2.5;
+            model.position.y = enemy.startY + Math.cos(enemy.weaveOffset * 0.7) * 1.5;
+        }
+
+        model.position.z += enemy.speed * dt;
+
+        // Fire
+        enemy.fireTimer -= dt;
+        if (enemy.fireTimer <= 0 && enemy.type !== 'bomber') {
+            spawnEnemyLaser(enemy);
+            if (enemy.type === 'ace') {
+                enemy.fireTimer = 0.3 + Math.random() * 0.4;
+            } else {
+                enemy.fireTimer = 1.5 + Math.random() * 2;
+            }
+        }
+
+        // Bomber mines
+        if (enemy.type === 'bomber') {
+            enemy.mineTimer -= dt;
+            if (enemy.mineTimer <= 0) {
+                spawnMine(model.position.x, model.position.y, model.position.z);
+                enemy.mineTimer = 2 + Math.random() * 2;
+            }
+        }
+
+        // Flash timer (hit feedback)
+        if (enemy.flashTimer > 0) {
+            enemy.flashTimer -= dt;
+            if (enemy.flashTimer <= 0) {
+                // Restore materials - just toggle visibility briefly handled by the flash
+            }
+        }
+
+        // Despawn if past camera
+        if (model.position.z > 10) {
+            enemy.active = false;
+            model.visible = false;
+        }
+    }
+
+    // ─ Update asteroids ─
+    for (const ast of asteroids) {
+        if (!ast.active) continue;
+        ast.mesh.position.x += ast.vx * dt;
+        ast.mesh.position.y += ast.vy * dt;
+        ast.mesh.position.z += ast.vz * dt;
+        ast.mesh.rotation.x += ast.rotSpeed.x * dt;
+        ast.mesh.rotation.y += ast.rotSpeed.y * dt;
+        ast.mesh.rotation.z += ast.rotSpeed.z * dt;
+        if (ast.mesh.position.z > 10) {
+            ast.active = false;
+            ast.mesh.visible = false;
+        }
+    }
+
+    // ─ Update mines ─
+    for (const mine of mines) {
+        if (!mine.active) continue;
+        mine.life -= dt;
+        // Pulse
+        const pulse = 0.5 + Math.sin(gameTime * 8) * 0.3;
+        mine.mesh.material.opacity = pulse;
+        if (mine.life <= 0 || mine.mesh.position.z > 10) {
+            mine.active = false;
+            mine.mesh.visible = false;
+        }
+    }
+
+    // ─ Update explosions ─
+    for (const p of explosionParticles) {
+        if (!p.active) continue;
+        p.life -= dt;
+        p.mesh.position.x += p.vx * dt;
+        p.mesh.position.y += p.vy * dt;
+        p.mesh.position.z += p.vz * dt;
+        p.vx *= 0.96;
+        p.vy *= 0.96;
+        p.vz *= 0.96;
+        p.mesh.material.opacity = Math.max(0, p.life / 0.5);
+        p.mesh.scale.multiplyScalar(0.97);
+        if (p.life <= 0) {
+            p.active = false;
+            p.mesh.visible = false;
+        }
+    }
+
+    // ─ Update exhaust ─
+    for (const p of exhaustParticles) {
+        if (!p.active) continue;
+        p.life -= dt;
+        p.mesh.position.x += p.vx * dt;
+        p.mesh.position.y += p.vy * dt;
+        p.mesh.position.z += p.vz * dt;
+        p.mesh.material.opacity *= 0.92;
+        p.mesh.scale.multiplyScalar(0.94);
+        if (p.life <= 0) {
+            p.active = false;
+            p.mesh.visible = false;
+        }
+    }
+
+    // ─ Update power-ups ─
+    for (const pu of powerups) {
+        if (!pu.active) continue;
+        pu.mesh.position.z += pu.vz * dt;
+        pu.mesh.rotation.y += 3 * dt;
+        pu.mesh.rotation.x += 1.5 * dt;
+        if (pu.mesh.position.z > 10) {
+            pu.active = false;
+            pu.mesh.visible = false;
+        }
+    }
+
+    // ─ Update starfield ─
+    const positions = stars.geometry.attributes.position;
+    const starSpeedMult = boostTimer > 0 ? 3.0 : 1.0;
+    for (let i = 0; i < STAR_COUNT; i++) {
+        let z = positions.getZ(i);
+        z += starSpeeds[i] * dt * starSpeedMult;
+        if (z > 5) {
+            z = -65 - Math.random() * 10;
+            positions.setX(i, (Math.random() - 0.5) * 60);
+            positions.setY(i, (Math.random() - 0.5) * 40);
+        }
+        positions.setZ(i, z);
+    }
+    positions.needsUpdate = true;
+
+    // ─── COLLISIONS ───
+
+    // Player lasers vs enemies
+    for (const laser of playerLasers) {
+        if (!laser.active) continue;
+        for (const enemy of enemyPool) {
+            if (!enemy.active) continue;
+            const model = enemy.currentModel;
+            const hitRadius = enemy.type === 'bomber' ? 1.0 : 0.6;
+            if (checkCollision(laser.mesh.position, model.position, hitRadius)) {
+                laser.active = false;
+                laser.mesh.visible = false;
+                enemy.hp--;
+                if (enemy.hp <= 0) {
+                    // Destroyed
+                    enemy.active = false;
+                    model.visible = false;
+                    spawnExplosion(model.position.x, model.position.y, model.position.z);
+
+                    // Score
+                    let pts = enemy.type === 'fighter' ? 100 : (enemy.type === 'bomber' ? 300 : 500);
+                    pts *= comboMultiplier;
+                    score += pts;
+
+                    // Combo
+                    comboTimer = COMBO_TIMEOUT;
+                    comboMultiplier = Math.min(5, comboMultiplier + 1);
+
+                    // Power-up drop chance
+                    if (Math.random() < 0.1) {
+                        spawnPowerup(model.position.x, model.position.y, model.position.z);
+                    }
+                } else {
+                    // Hit flash - briefly scale for visual feedback
+                    enemy.flashTimer = 0.1;
+                    // Quick white flash by briefly changing emissive
+                    model.traverse(child => {
+                        if (child.isMesh && child.material && child.material.emissive) {
+                            child.material.emissive.setHex(0xffffff);
+                            child.material.emissiveIntensity = 3.0;
+                        }
+                    });
+                    setTimeout(() => {
+                        model.traverse(child => {
+                            if (child.isMesh && child.material && child.material.emissive) {
+                                if (child.material === matCyan) {
+                                    child.material.emissive.setHex(0x00ccff);
+                                    child.material.emissiveIntensity = 2.0;
+                                } else {
+                                    child.material.emissive.setHex(0x000000);
+                                    child.material.emissiveIntensity = 0;
+                                }
+                            }
+                        });
+                    }, 80);
+                }
+                break;
+            }
+        }
+    }
+
+    // Enemy lasers vs player
+    for (const laser of enemyLasers) {
+        if (!laser.active) continue;
+        if (checkCollision(laser.mesh.position, playerShip.position, 0.6)) {
+            laser.active = false;
+            laser.mesh.visible = false;
+            damagePlayer(10);
+        }
+    }
+
+    // Asteroids vs player
+    for (const ast of asteroids) {
+        if (!ast.active) continue;
+        const astRadius = Math.max(ast.mesh.scale.x, ast.mesh.scale.y, ast.mesh.scale.z) * 0.5 + 0.3;
+        if (checkCollision(ast.mesh.position, playerShip.position, astRadius)) {
+            damagePlayer(20);
+            // Push asteroid away slightly so no repeated hits
+            ast.mesh.position.z += 2;
+        }
+    }
+
+    // Mines vs player
+    for (const mine of mines) {
+        if (!mine.active) continue;
+        if (checkCollision(mine.mesh.position, playerShip.position, 0.5)) {
+            mine.active = false;
+            mine.mesh.visible = false;
+            damagePlayer(15);
+            spawnExplosion(mine.mesh.position.x, mine.mesh.position.y, mine.mesh.position.z, 8);
+        }
+    }
+
+    // Power-ups vs player
+    for (const pu of powerups) {
+        if (!pu.active) continue;
+        if (checkCollision(pu.mesh.position, playerShip.position, 0.8)) {
+            pu.active = false;
+            pu.mesh.visible = false;
+            if (pu.type === 'health') {
+                playerHP = Math.min(100, playerHP + 30);
+                showPowerupText('+30 HP');
+            } else if (pu.type === 'rapid') {
+                rapidFireTimer = 5.0;
+                showPowerupText('RAPID FIRE!');
+            } else if (pu.type === 'shield') {
+                playerShield = maxShield;
+                invulnTimer = Math.max(invulnTimer, 3.0);
+                showPowerupText('SHIELD!');
+            }
+        }
+    }
+
+    // ─ Camera shake ─
+    if (shakeTimer > 0) {
+        camera.position.x = cameraBasePos.x + (Math.random() - 0.5) * shakeIntensity;
+        camera.position.y = cameraBasePos.y + (Math.random() - 0.5) * shakeIntensity;
+    } else {
+        camera.position.x = cameraBasePos.x;
+        camera.position.y = cameraBasePos.y;
+    }
+
+    updateHUD();
+}
+
+function animate(time) {
+    requestAnimationFrame(animate);
+
+    const dt = Math.min(clock.getDelta(), 0.05); // Cap delta to avoid spiral of death
+
+    // FPS counter
+    fpsFrames++;
+    fpsTime += dt;
+    if (fpsTime >= 0.5) {
+        fpsDisplay = Math.round(fpsFrames / fpsTime);
+        $fps.textContent = `${fpsDisplay} FPS`;
+        fpsFrames = 0;
+        fpsTime = 0;
+    }
+
+    update(dt);
+
+    // Always rotate power-ups even when not playing (visual polish)
+    if (gameState !== 'PLAYING') {
+        // Update starfield slowly for start screen ambiance
+        const positions = stars.geometry.attributes.position;
+        for (let i = 0; i < STAR_COUNT; i++) {
+            let z = positions.getZ(i);
+            z += starSpeeds[i] * dt * 0.3;
+            if (z > 5) {
+                z = -65 - Math.random() * 10;
+                positions.setX(i, (Math.random() - 0.5) * 60);
+                positions.setY(i, (Math.random() - 0.5) * 40);
+            }
+            positions.setZ(i, z);
+        }
+        positions.needsUpdate = true;
+    }
+
+    renderer.render(scene, camera);
+}
+
+// ─── START ───
+clock.start();
+requestAnimationFrame(animate);
+
+</script>
+</body>
+</html>
