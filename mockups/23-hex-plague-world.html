@@ -1,0 +1,638 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>23 / Hex Plague — World</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #000003; overflow: hidden; font-family: 'Courier New', monospace; }
+canvas { display: block; }
+#ui {
+    position: fixed; top: 16px; left: 20px; z-index: 10;
+    color: #99aacc; pointer-events: none;
+}
+#ui h1 {
+    font-size: 18px; font-weight: 700; letter-spacing: 3px;
+    color: #ddeeff; margin-bottom: 4px;
+}
+#ui p { font-size: 10px; color: #667799; }
+#stats {
+    margin-top: 8px; font-size: 10px; color: #556677;
+}
+#back {
+    position: fixed; top: 18px; right: 20px; z-index: 10;
+    color: #556677; text-decoration: none; font-family: 'Courier New', monospace;
+    font-size: 12px;
+}
+#back:hover { color: #aabbdd; }
+#plague-stats {
+    position: fixed; bottom: 12px; left: 50%; transform: translateX(-50%);
+    font-family: 'Courier New', monospace; font-size: 12px; color: #ff4444;
+    z-index: 10; pointer-events: none; text-align: center;
+    text-shadow: 0 0 8px #ff444444;
+}
+#day {
+    position: fixed; top: 12px; right: 60px;
+    font-family: 'Courier New', monospace; font-size: 14px; color: #ff4444;
+    z-index: 10; pointer-events: none;
+}
+</style>
+<script type="importmap">
+{
+    "imports": {
+        "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+    }
+}
+</script>
+</head>
+<body>
+
+<div id="ui">
+    <h1>23 / HEX PLAGUE &mdash; WORLD</h1>
+    <p>Planetary hex infection &middot; Orbital view &middot; Transport arcs</p>
+    <div id="stats">-- FPS</div>
+</div>
+<a id="back" href="../index.html">&larr; back</a>
+<div id="plague-stats">
+    INFECTED: <span id="infectedCount">0</span> &middot; DEAD: <span id="deadCount">0</span><br>
+    <span style="color:#4488ff">CURE: <span id="cureBar">░░░░░░░░░░░░░░░░░░░░</span> <span id="curePct">0</span>%</span>
+</div>
+<div id="day">DAY <span id="dayCount">0</span></div>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+// ── Renderer ──
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 0.8;
+document.body.appendChild(renderer.domElement);
+
+// ── Scene ──
+const scene = new THREE.Scene();
+
+// ── Camera ──
+const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 500);
+camera.position.set(0, 8, 20);
+
+// ── Controls ──
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.05;
+controls.autoRotate = true;
+controls.autoRotateSpeed = 0.4;
+controls.minDistance = 12;
+controls.maxDistance = 35;
+
+// ── Lighting ──
+const sunLight = new THREE.DirectionalLight(0xffeedd, 1.2);
+sunLight.position.set(15, 8, 10);
+scene.add(sunLight);
+
+const ambientLight = new THREE.AmbientLight(0x112233, 0.3);
+scene.add(ambientLight);
+
+// Subtle rim light from behind
+const rimLight = new THREE.DirectionalLight(0x4466aa, 0.3);
+rimLight.position.set(-10, -5, -15);
+scene.add(rimLight);
+
+// ── Stars Background ──
+function createStars() {
+    const geo = new THREE.BufferGeometry();
+    const positions = new Float32Array(1000 * 3);
+    const sizes = new Float32Array(1000);
+    for (let i = 0; i < 1000; i++) {
+        const theta = Math.random() * Math.PI * 2;
+        const phi = Math.acos(2 * Math.random() - 1);
+        const r = 150 + Math.random() * 100;
+        positions[i * 3] = r * Math.sin(phi) * Math.cos(theta);
+        positions[i * 3 + 1] = r * Math.sin(phi) * Math.sin(theta);
+        positions[i * 3 + 2] = r * Math.cos(phi);
+        sizes[i] = 0.5 + Math.random() * 1.5;
+    }
+    geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geo.setAttribute('size', new THREE.BufferAttribute(sizes, 1));
+
+    const mat = new THREE.PointsMaterial({
+        color: 0xccccff,
+        size: 0.3,
+        sizeAttenuation: true,
+        transparent: true,
+        opacity: 0.8
+    });
+    const stars = new THREE.Points(geo, mat);
+    scene.add(stars);
+}
+createStars();
+
+// ── Hex Globe ──
+const GLOBE_RADIUS = 8;
+const globeGeo = new THREE.IcosahedronGeometry(GLOBE_RADIUS, 4);
+// Make it non-indexed so each face has its own vertices for vertex colors
+const nonIndexedGeo = globeGeo.toNonIndexed();
+const faceCount = nonIndexedGeo.attributes.position.count / 3;
+
+// Set up vertex colors
+const colors = new Float32Array(nonIndexedGeo.attributes.position.count * 3);
+nonIndexedGeo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+// Face data for infection simulation
+const HEALTHY = 0;
+const INFECTED_LIGHT = 1;
+const INFECTED_HEAVY = 2;
+const DEAD = 3;
+
+const faceStates = new Array(faceCount).fill(HEALTHY);
+const faceInfectionLevel = new Float32Array(faceCount); // 0-1 continuous
+const faceFlashTime = new Float32Array(faceCount); // time of last infection flash
+const faceCenters = []; // center position of each face for adjacency
+
+// Compute face centers
+const posAttr = nonIndexedGeo.attributes.position;
+for (let i = 0; i < faceCount; i++) {
+    const cx = (posAttr.getX(i * 3) + posAttr.getX(i * 3 + 1) + posAttr.getX(i * 3 + 2)) / 3;
+    const cy = (posAttr.getY(i * 3) + posAttr.getY(i * 3 + 1) + posAttr.getY(i * 3 + 2)) / 3;
+    const cz = (posAttr.getZ(i * 3) + posAttr.getZ(i * 3 + 1) + posAttr.getZ(i * 3 + 2)) / 3;
+    faceCenters.push(new THREE.Vector3(cx, cy, cz));
+}
+
+// Build adjacency — faces that share an edge or are very close
+const adjacency = [];
+const ADJACENCY_THRESHOLD = 2.2; // distance threshold for neighbors
+for (let i = 0; i < faceCount; i++) {
+    adjacency[i] = [];
+}
+for (let i = 0; i < faceCount; i++) {
+    for (let j = i + 1; j < faceCount; j++) {
+        const d = faceCenters[i].distanceTo(faceCenters[j]);
+        if (d < ADJACENCY_THRESHOLD) {
+            adjacency[i].push(j);
+            adjacency[j].push(i);
+        }
+    }
+}
+
+// Color definitions
+const COLOR_HEALTHY = new THREE.Color(0x1a4a2a);
+const COLOR_INFECTED_LIGHT = new THREE.Color(0x8a6a1a);
+const COLOR_INFECTED_HEAVY = new THREE.Color(0x8a1a1a);
+const COLOR_DEAD = new THREE.Color(0x1a0a0a);
+const COLOR_FLASH = new THREE.Color(0xff6633);
+const tmpColor = new THREE.Color();
+
+function getBaseColor(state, level) {
+    if (state === HEALTHY) return COLOR_HEALTHY;
+    if (state === DEAD) return COLOR_DEAD;
+    // Lerp between light and heavy infection
+    tmpColor.copy(COLOR_INFECTED_LIGHT).lerp(COLOR_INFECTED_HEAVY, level);
+    return tmpColor;
+}
+
+function updateFaceColor(faceIndex, time) {
+    const colorAttr = nonIndexedGeo.attributes.color;
+    const baseColor = getBaseColor(faceStates[faceIndex], faceInfectionLevel[faceIndex]);
+
+    // Flash effect
+    const flashAge = time - faceFlashTime[faceIndex];
+    let r = baseColor.r, g = baseColor.g, b = baseColor.b;
+
+    if (flashAge < 0.5 && faceFlashTime[faceIndex] > 0) {
+        const flashIntensity = Math.max(0, 1.0 - flashAge * 2.0);
+        r = r + (COLOR_FLASH.r - r) * flashIntensity;
+        g = g + (COLOR_FLASH.g - g) * flashIntensity;
+        b = b + (COLOR_FLASH.b - b) * flashIntensity;
+    }
+
+    // Emissive pulse for heavily infected
+    if (faceStates[faceIndex] === INFECTED_HEAVY) {
+        const pulse = 0.1 * Math.sin(time * 3 + faceIndex * 0.5) + 0.1;
+        r += pulse;
+    }
+
+    for (let v = 0; v < 3; v++) {
+        colorAttr.setXYZ(faceIndex * 3 + v, r, g, b);
+    }
+}
+
+// Initialize all face colors
+const initTime = 0;
+for (let i = 0; i < faceCount; i++) {
+    updateFaceColor(i, initTime);
+}
+nonIndexedGeo.attributes.color.needsUpdate = true;
+
+const globeMat = new THREE.MeshLambertMaterial({
+    vertexColors: true,
+    flatShading: true
+});
+const globe = new THREE.Mesh(nonIndexedGeo, globeMat);
+scene.add(globe);
+
+// ── Atmosphere Glow ──
+const atmosGeo = new THREE.SphereGeometry(8.3, 64, 64);
+const atmosMat = new THREE.ShaderMaterial({
+    vertexShader: `
+        varying vec3 vNormal;
+        varying vec3 vWorldPos;
+        void main() {
+            vNormal = normalize(normalMatrix * normal);
+            vWorldPos = (modelMatrix * vec4(position, 1.0)).xyz;
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+    `,
+    fragmentShader: `
+        varying vec3 vNormal;
+        varying vec3 vWorldPos;
+        uniform float uTime;
+        uniform float uInfectionRatio;
+        void main() {
+            vec3 viewDir = normalize(cameraPosition - vWorldPos);
+            float rim = 1.0 - max(0.0, dot(viewDir, vNormal));
+            rim = pow(rim, 3.0);
+
+            // Transition from blue-green to red based on infection
+            vec3 healthyColor = vec3(0.2, 0.5, 0.8);
+            vec3 infectedColor = vec3(0.8, 0.15, 0.1);
+            vec3 color = mix(healthyColor, infectedColor, uInfectionRatio);
+
+            // Subtle pulse
+            float pulse = 0.85 + 0.15 * sin(uTime * 1.5);
+
+            gl_FragColor = vec4(color * rim * pulse, rim * 0.6);
+        }
+    `,
+    uniforms: {
+        uTime: { value: 0 },
+        uInfectionRatio: { value: 0 }
+    },
+    transparent: true,
+    side: THREE.FrontSide,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending
+});
+const atmosphere = new THREE.Mesh(atmosGeo, atmosMat);
+scene.add(atmosphere);
+
+// ── Transport Route Arcs ──
+const arcGroup = new THREE.Group();
+scene.add(arcGroup);
+
+const arcs = [];
+const arcDots = [];
+
+function createArc(startFace, endFace) {
+    const start = faceCenters[startFace].clone().normalize().multiplyScalar(GLOBE_RADIUS + 0.05);
+    const end = faceCenters[endFace].clone().normalize().multiplyScalar(GLOBE_RADIUS + 0.05);
+
+    // Mid point lifted above surface
+    const mid = start.clone().add(end).multiplyScalar(0.5);
+    const dist = start.distanceTo(end);
+    mid.normalize().multiplyScalar(GLOBE_RADIUS + dist * 0.35);
+
+    // Additional control points for smoother curve
+    const q1 = start.clone().add(mid).multiplyScalar(0.5);
+    q1.normalize().multiplyScalar(GLOBE_RADIUS + dist * 0.2);
+    const q2 = end.clone().add(mid).multiplyScalar(0.5);
+    q2.normalize().multiplyScalar(GLOBE_RADIUS + dist * 0.2);
+
+    const curve = new THREE.CatmullRomCurve3([start, q1, mid, q2, end]);
+    const points = curve.getPoints(60);
+
+    const lineGeo = new THREE.BufferGeometry().setFromPoints(points);
+    const lineMat = new THREE.LineBasicMaterial({
+        color: 0xff3333,
+        transparent: true,
+        opacity: 0.3,
+        blending: THREE.AdditiveBlending
+    });
+    const line = new THREE.Line(lineGeo, lineMat);
+    arcGroup.add(line);
+
+    // Traveling dot
+    const dotGeo = new THREE.SphereGeometry(0.08, 8, 8);
+    const dotMat = new THREE.MeshBasicMaterial({
+        color: 0xff4444,
+        transparent: true,
+        opacity: 0.9,
+        blending: THREE.AdditiveBlending
+    });
+    const dot = new THREE.Mesh(dotGeo, dotMat);
+    arcGroup.add(dot);
+
+    // Glow for the dot
+    const glowGeo = new THREE.SphereGeometry(0.2, 8, 8);
+    const glowMat = new THREE.MeshBasicMaterial({
+        color: 0xff2200,
+        transparent: true,
+        opacity: 0.3,
+        blending: THREE.AdditiveBlending
+    });
+    const glow = new THREE.Mesh(glowGeo, glowMat);
+    dot.add(glow);
+
+    arcs.push({ curve, line, startFace, endFace });
+    arcDots.push({
+        dot,
+        curve,
+        t: Math.random(),
+        speed: 0.08 + Math.random() * 0.06,
+        startFace,
+        endFace
+    });
+}
+
+// Generate arcs between distant face pairs
+function pickDistantFaces() {
+    const pairs = [];
+    for (let n = 0; n < 8; n++) {
+        let a, b, attempts = 0;
+        do {
+            a = Math.floor(Math.random() * faceCount);
+            b = Math.floor(Math.random() * faceCount);
+            attempts++;
+        } while (faceCenters[a].distanceTo(faceCenters[b]) < 8 && attempts < 100);
+        pairs.push([a, b]);
+    }
+    return pairs;
+}
+
+const arcPairs = pickDistantFaces();
+arcPairs.forEach(([a, b]) => createArc(a, b));
+
+// ── Satellites ──
+const satellites = [];
+function createSatellite(orbitRadius, orbitSpeed, orbitTilt) {
+    const group = new THREE.Group();
+
+    // Body
+    const bodyGeo = new THREE.BoxGeometry(0.15, 0.08, 0.15);
+    const bodyMat = new THREE.MeshLambertMaterial({ color: 0x888899 });
+    const body = new THREE.Mesh(bodyGeo, bodyMat);
+    group.add(body);
+
+    // Solar panels
+    const panelGeo = new THREE.BoxGeometry(0.5, 0.01, 0.12);
+    const panelMat = new THREE.MeshLambertMaterial({ color: 0x2244aa });
+    const panelL = new THREE.Mesh(panelGeo, panelMat);
+    panelL.position.x = -0.32;
+    group.add(panelL);
+    const panelR = new THREE.Mesh(panelGeo, panelMat);
+    panelR.position.x = 0.32;
+    group.add(panelR);
+
+    // Blinking light
+    const lightGeo = new THREE.SphereGeometry(0.03, 4, 4);
+    const lightMat = new THREE.MeshBasicMaterial({ color: 0xff0000 });
+    const lightMesh = new THREE.Mesh(lightGeo, lightMat);
+    lightMesh.position.y = 0.06;
+    group.add(lightMesh);
+
+    scene.add(group);
+    satellites.push({ group, orbitRadius, orbitSpeed, orbitTilt, angle: Math.random() * Math.PI * 2, lightMat });
+}
+
+createSatellite(9.5, 0.3, 0.3);
+createSatellite(10.2, 0.2, -0.5);
+createSatellite(9.8, 0.25, 1.2);
+
+// ── Infection Simulation State ──
+let infectedCountNum = 0;
+let deadCountNum = 0;
+let dayNum = 0;
+let cureProgress = 0;
+let lastDayTime = 0;
+let lastSpreadTime = 0;
+const POPULATION_PER_FACE = Math.floor(8000000000 / faceCount); // ~8B total
+
+// Start infection at a random face
+const patientZero = Math.floor(Math.random() * faceCount);
+faceStates[patientZero] = INFECTED_LIGHT;
+faceInfectionLevel[patientZero] = 0.1;
+faceFlashTime[patientZero] = 0.01;
+infectedCountNum = POPULATION_PER_FACE;
+
+// Infection point lights for dramatic effect
+const infectionLights = [];
+function addInfectionLight(position) {
+    if (infectionLights.length > 6) {
+        // Remove oldest
+        const old = infectionLights.shift();
+        scene.remove(old);
+    }
+    const light = new THREE.PointLight(0xff2200, 0.5, 4);
+    light.position.copy(position.clone().normalize().multiplyScalar(GLOBE_RADIUS + 0.3));
+    scene.add(light);
+    infectionLights.push(light);
+    light.userData.birthTime = performance.now() / 1000;
+}
+
+// ── UI Elements ──
+const infectedEl = document.getElementById('infectedCount');
+const deadEl = document.getElementById('deadCount');
+const dayEl = document.getElementById('dayCount');
+const cureBarEl = document.getElementById('cureBar');
+const curePctEl = document.getElementById('curePct');
+const statsEl = document.getElementById('stats');
+
+function formatNum(n) {
+    if (n >= 1e9) return (n / 1e9).toFixed(1) + 'B';
+    if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+    if (n >= 1e3) return Math.floor(n).toLocaleString();
+    return String(Math.floor(n));
+}
+
+function updateUI() {
+    infectedEl.textContent = formatNum(infectedCountNum);
+    deadEl.textContent = formatNum(deadCountNum);
+    dayEl.textContent = dayNum;
+    const filled = Math.floor(cureProgress / 5);
+    const bar = '\u2588'.repeat(filled) + '\u2591'.repeat(20 - filled);
+    cureBarEl.textContent = bar;
+    curePctEl.textContent = Math.floor(cureProgress);
+}
+
+// ── Animation ──
+const clock = new THREE.Clock();
+let frameCount = 0;
+let fpsTime = 0;
+
+function spreadInfection(time) {
+    if (time - lastSpreadTime < 0.08) return; // spread tick rate
+    lastSpreadTime = time;
+
+    const newInfections = [];
+
+    for (let i = 0; i < faceCount; i++) {
+        if (faceStates[i] === HEALTHY) continue;
+        if (faceStates[i] === DEAD) continue;
+
+        // Progress existing infection
+        if (faceStates[i] === INFECTED_LIGHT) {
+            faceInfectionLevel[i] += 0.003 + Math.random() * 0.004;
+            if (faceInfectionLevel[i] > 0.6) {
+                faceStates[i] = INFECTED_HEAVY;
+            }
+        } else if (faceStates[i] === INFECTED_HEAVY) {
+            faceInfectionLevel[i] += 0.002 + Math.random() * 0.002;
+            if (faceInfectionLevel[i] > 1.0) {
+                faceInfectionLevel[i] = 1.0;
+                if (Math.random() < 0.003) {
+                    faceStates[i] = DEAD;
+                    deadCountNum += POPULATION_PER_FACE * 0.3;
+                }
+            }
+        }
+
+        // Spread to neighbors
+        const neighbors = adjacency[i];
+        for (let n = 0; n < neighbors.length; n++) {
+            const ni = neighbors[n];
+            if (faceStates[ni] === HEALTHY) {
+                // Probability based on current infection level
+                const spreadChance = 0.004 * faceInfectionLevel[i];
+                if (Math.random() < spreadChance) {
+                    newInfections.push(ni);
+                }
+            }
+        }
+    }
+
+    // Apply new infections
+    for (const fi of newInfections) {
+        if (faceStates[fi] === HEALTHY) {
+            faceStates[fi] = INFECTED_LIGHT;
+            faceInfectionLevel[fi] = 0.05;
+            faceFlashTime[fi] = time;
+            infectedCountNum += POPULATION_PER_FACE;
+            addInfectionLight(faceCenters[fi]);
+        }
+    }
+
+    // Transport arc infections — arcs can seed distant infections
+    for (const arcDot of arcDots) {
+        if (arcDot.t > 0.95) {
+            const target = arcDot.endFace;
+            if (faceStates[target] === HEALTHY && faceStates[arcDot.startFace] >= INFECTED_LIGHT) {
+                if (Math.random() < 0.02) {
+                    faceStates[target] = INFECTED_LIGHT;
+                    faceInfectionLevel[target] = 0.1;
+                    faceFlashTime[target] = time;
+                    infectedCountNum += POPULATION_PER_FACE;
+                    addInfectionLight(faceCenters[target]);
+                }
+            }
+        }
+    }
+}
+
+function animate() {
+    requestAnimationFrame(animate);
+
+    const dt = clock.getDelta();
+    const time = clock.getElapsedTime();
+
+    // FPS counter
+    frameCount++;
+    if (time - fpsTime > 0.5) {
+        statsEl.textContent = Math.round(frameCount / (time - fpsTime)) + ' FPS';
+        frameCount = 0;
+        fpsTime = time;
+    }
+
+    // Day counter
+    if (time - lastDayTime > 0.5) {
+        dayNum++;
+        lastDayTime = time;
+
+        // Slowly increase cure
+        if (dayNum > 50) {
+            cureProgress = Math.min(100, cureProgress + 0.15 + Math.random() * 0.2);
+        }
+    }
+
+    // Infection spread
+    spreadInfection(time);
+
+    // Update face colors
+    for (let i = 0; i < faceCount; i++) {
+        updateFaceColor(i, time);
+    }
+    nonIndexedGeo.attributes.color.needsUpdate = true;
+
+    // Atmosphere uniforms
+    const infectedRatio = faceStates.filter(s => s >= INFECTED_LIGHT).length / faceCount;
+    atmosMat.uniforms.uTime.value = time;
+    atmosMat.uniforms.uInfectionRatio.value = infectedRatio;
+
+    // Arc dots traveling
+    for (const ad of arcDots) {
+        ad.t += ad.speed * dt;
+        if (ad.t > 1) ad.t -= 1;
+        const pos = ad.curve.getPoint(ad.t);
+        ad.dot.position.copy(pos);
+    }
+
+    // Arc line opacity pulsing
+    for (const arc of arcs) {
+        const isActive = faceStates[arc.startFace] >= INFECTED_LIGHT;
+        arc.line.material.opacity = isActive ? 0.25 + 0.1 * Math.sin(time * 2) : 0.05;
+        arc.line.material.color.setHex(isActive ? 0xff3333 : 0x333355);
+    }
+
+    // Satellites orbiting
+    for (const sat of satellites) {
+        sat.angle += sat.orbitSpeed * dt;
+        const x = Math.cos(sat.angle) * sat.orbitRadius;
+        const z = Math.sin(sat.angle) * sat.orbitRadius;
+        const y = Math.sin(sat.angle * 0.7) * sat.orbitRadius * Math.sin(sat.orbitTilt);
+        sat.group.position.set(x, y * 0.3, z);
+        sat.group.lookAt(0, 0, 0);
+
+        // Blinking
+        const blink = Math.sin(time * 5 + sat.angle) > 0.8;
+        sat.lightMat.color.setHex(blink ? 0xff0000 : 0x330000);
+    }
+
+    // Fade infection point lights
+    const now = performance.now() / 1000;
+    for (let i = infectionLights.length - 1; i >= 0; i--) {
+        const light = infectionLights[i];
+        const age = now - light.userData.birthTime;
+        if (age > 3) {
+            light.intensity = Math.max(0, light.intensity - dt * 0.5);
+            if (light.intensity <= 0) {
+                scene.remove(light);
+                infectionLights.splice(i, 1);
+            }
+        } else {
+            light.intensity = 0.5 * (1.0 - age / 3);
+        }
+    }
+
+    // Update UI
+    updateUI();
+
+    // Controls
+    controls.update();
+
+    // Render
+    renderer.render(scene, camera);
+}
+
+// ── Resize ──
+window.addEventListener('resize', () => {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+animate();
+</script>
+</body>
+</html>

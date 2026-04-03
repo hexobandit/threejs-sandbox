@@ -1,0 +1,1389 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0,user-scalable=no">
+<title>Bomberman Hex</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{width:100%;height:100%;overflow:hidden;background:#000;touch-action:none;-webkit-touch-callout:none;-webkit-user-select:none;user-select:none}
+canvas#game{display:block;position:fixed;top:0;left:0;z-index:0}
+@keyframes blink{0%,49%{opacity:1}50%,100%{opacity:0}}
+@keyframes popIn{0%{transform:translate(-50%,-50%) scale(0);opacity:0}60%{transform:translate(-50%,-50%) scale(1.3);opacity:1}100%{transform:translate(-50%,-50%) scale(1);opacity:1}}
+#timer{position:fixed;top:12px;left:50%;transform:translateX(-50%);font-family:'Courier New',monospace;font-size:16px;color:#fff;z-index:10;pointer-events:none;text-shadow:0 2px 4px rgba(0,0,0,0.5)}
+#round{position:fixed;top:36px;left:50%;transform:translateX(-50%);font-family:'Courier New',monospace;font-size:11px;color:#ffcc00;z-index:10;pointer-events:none}
+#playerstats{position:fixed;bottom:60px;left:50%;transform:translateX(-50%);font-family:'Courier New',monospace;font-size:11px;color:#fff;z-index:10;pointer-events:none;display:flex;gap:12px;background:rgba(0,0,0,0.6);padding:6px 12px;border-radius:6px;white-space:nowrap}
+#bombBtn{position:fixed;bottom:15px;right:15px;width:70px;height:70px;border-radius:50%;background:rgba(255,50,50,0.7);border:3px solid rgba(255,255,255,0.5);z-index:15;display:flex;align-items:center;justify-content:center;font-family:'Courier New',monospace;font-size:24px;color:#fff;text-shadow:0 2px 4px rgba(0,0,0,0.5);cursor:pointer;-webkit-tap-highlight-color:transparent}
+#bombBtn:active{background:rgba(255,50,50,1);transform:scale(0.92)}
+#joystickCanvas{position:fixed;top:0;left:0;width:60%;height:100%;z-index:12;pointer-events:none;opacity:0}
+#centerMsg{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);font-family:'Courier New',monospace;font-size:36px;color:#fff;z-index:25;pointer-events:none;text-shadow:0 3px 8px rgba(0,0,0,0.7);display:none;text-align:center}
+#startscreen{position:fixed;inset:0;background:rgba(0,0,0,0.88);z-index:30;display:flex;flex-direction:column;align-items:center;justify-content:center;font-family:'Courier New',monospace;color:#fff}
+#startscreen h1{font-size:28px;color:#ffcc00;margin-bottom:8px;letter-spacing:2px}
+#startscreen .sub{font-size:12px;color:#888;margin-bottom:4px}
+#startscreen .tap{font-size:16px;color:#ffcc00;margin-top:20px;animation:blink 1s step-end infinite}
+#gameover{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.88);z-index:30;flex-direction:column;align-items:center;justify-content:center;font-family:'Courier New',monospace;color:#fff}
+#gameover h1{font-size:28px;color:#ffcc00;margin-bottom:12px}
+#gameover #standings{font-size:14px;color:#aaa;margin-bottom:24px;line-height:2;text-align:center}
+#gameover .tap{font-size:14px;color:#888;animation:blink 1s step-end infinite}
+.popup{position:fixed;font-family:'Courier New',monospace;font-size:14px;font-weight:bold;z-index:20;pointer-events:none;animation:popIn 0.3s ease-out forwards;text-shadow:0 2px 4px rgba(0,0,0,0.6)}
+</style>
+</head>
+<body>
+
+<div id="timer">2:00</div>
+<div id="round">ROUND 1 / 3</div>
+<div id="playerstats"></div>
+<div id="bombBtn">B</div>
+<canvas id="joystickCanvas"></canvas>
+<div id="centerMsg"></div>
+
+<div id="startscreen">
+    <h1>BOMBERMAN HEX</h1>
+    <p class="sub">DRAG LEFT SIDE TO MOVE</p>
+    <p class="sub">TAP B BUTTON TO PLACE BOMB</p>
+    <p class="sub">6-DIRECTION HEX EXPLOSIONS!</p>
+    <p class="sub" style="margin-top:8px;color:#aaa">DESKTOP: WASD + SPACE</p>
+    <p class="tap">TAP TO START</p>
+</div>
+
+<div id="gameover">
+    <h1 id="winner">YOU WIN!</h1>
+    <div id="standings"></div>
+    <p class="tap">TAP TO PLAY AGAIN</p>
+</div>
+
+<script type="importmap">
+{
+    "imports": {
+        "three": "https://unpkg.com/three@0.160.0/build/three.module.js"
+    }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+
+// ─── CONSTANTS ───
+const HEX_SIZE = 0.9;
+const GAP = 0.06;
+const S = HEX_SIZE + GAP;
+const GRID_RADIUS = 5;
+const ROUNDS_TO_WIN = 2; // first to 2 wins (best of 3)
+const ROUND_TIME = 120; // seconds
+
+const HEX_DIRS = [
+    {q:1, r:0}, {q:0, r:1}, {q:-1, r:1},
+    {q:-1, r:0}, {q:0, r:-1}, {q:1, r:-1}
+];
+
+const SPAWNS = [{q:-3,r:-1}, {q:3,r:1}, {q:-1,r:3}, {q:1,r:-3}];
+
+const ENTITY_COLORS = [0xffffff, 0x333333, 0xee4444, 0x4488ee];
+const ENTITY_NAMES = ['YOU', 'BOT1', 'BOT2', 'BOT3'];
+
+// ─── GLOBAL STATE ───
+let scene, camera, renderer;
+let grid = {}; // key "q,r" -> tile data
+let entities = [];
+let player;
+let activeBombs = [];
+let activeExplosions = [];
+let activePowerups = [];
+let gameState = 'START'; // START, COUNTDOWN, PLAYING, ROUND_END, GAME_OVER
+let currentRound = 1;
+let wins = [0, 0, 0, 0];
+let roundTimer = ROUND_TIME;
+let shrinkRing = GRID_RADIUS;
+let shrinkTimer = 0;
+let clock = new THREE.Clock();
+
+// Mesh pools
+let bombMeshPool = [];
+let explosionMeshPool = [];
+let powerupMeshes = [];
+let blockMeshes = {};
+let floorMeshes = {};
+let wallMeshes = {};
+
+// Input
+let joystickTouch = null;
+let joystickOrigin = null;
+let moveDir = null;
+let keysDown = {};
+
+// DOM
+const timerEl = document.getElementById('timer');
+const roundEl = document.getElementById('round');
+const statsEl = document.getElementById('playerstats');
+const centerMsg = document.getElementById('centerMsg');
+const startScreen = document.getElementById('startscreen');
+const gameoverScreen = document.getElementById('gameover');
+const winnerEl = document.getElementById('winner');
+const standingsEl = document.getElementById('standings');
+const bombBtn = document.getElementById('bombBtn');
+const joystickCanvas = document.getElementById('joystickCanvas');
+const jCtx = joystickCanvas.getContext('2d');
+
+// ─── HEX MATH ───
+function hexToWorld(q, r) {
+    const x = S * 1.5 * q;
+    const z = S * Math.sqrt(3) * (r + q / 2);
+    return { x, z };
+}
+
+function hexDist(q1, r1, q2, r2) {
+    const dq = q1 - q2, dr = r1 - r2;
+    return Math.max(Math.abs(dq), Math.abs(dr), Math.abs(dq + dr));
+}
+
+function getNeighbors(q, r) {
+    return HEX_DIRS.map(d => ({ q: q + d.q, r: r + d.r }));
+}
+
+function hexKey(q, r) { return q + ',' + r; }
+
+// ─── ARENA GENERATION ───
+function getTileType(q, r) {
+    const d = hexDist(q, r, 0, 0);
+    if (d > GRID_RADIUS) return 'NONE';
+    if (d === GRID_RADIUS) return 'WALL';
+
+    // Pillar pattern
+    if (q % 2 === 0 && r % 2 === 0 && d > 0 && d < GRID_RADIUS) return 'WALL';
+
+    // Spawn zones clear
+    for (const sp of SPAWNS) {
+        if (hexDist(q, r, sp.q, sp.r) <= 1) return 'EMPTY';
+    }
+
+    // Deterministic hash for block placement
+    const hash = Math.abs(Math.sin(q * 127.1 + r * 311.7)) * 43758.5453 % 1;
+    if (hash < 0.6) return 'BLOCK';
+    return 'EMPTY';
+}
+
+// ─── THREE.JS SETUP ───
+function initThree() {
+    scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x88bbee);
+
+    const aspect = window.innerWidth / window.innerHeight;
+    const frustum = 11;
+    camera = new THREE.OrthographicCamera(
+        -frustum * aspect, frustum * aspect,
+        frustum, -frustum, 0.1, 100
+    );
+    camera.position.set(15, 15, 15);
+    camera.lookAt(0, 0, 0);
+
+    renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.domElement.id = 'game';
+    document.body.prepend(renderer.domElement);
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+    // Lights
+    const hemi = new THREE.HemisphereLight(0xffffff, 0x446688, 0.8);
+    scene.add(hemi);
+
+    const dir = new THREE.DirectionalLight(0xffffff, 1.0);
+    dir.position.set(8, 16, 10);
+    dir.castShadow = true;
+    dir.shadow.mapSize.set(512, 512);
+    dir.shadow.camera.left = -16;
+    dir.shadow.camera.right = 16;
+    dir.shadow.camera.top = 16;
+    dir.shadow.camera.bottom = -16;
+    dir.shadow.camera.near = 1;
+    dir.shadow.camera.far = 40;
+    scene.add(dir);
+
+    const ambient = new THREE.AmbientLight(0x404060, 0.3);
+    scene.add(ambient);
+
+    window.addEventListener('resize', onResize);
+}
+
+function onResize() {
+    const aspect = window.innerWidth / window.innerHeight;
+    const frustum = 11;
+    camera.left = -frustum * aspect;
+    camera.right = frustum * aspect;
+    camera.top = frustum;
+    camera.bottom = -frustum;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+}
+
+// ─── GEOMETRY CACHE ───
+const geoCache = {};
+function getGeo(type, ...args) {
+    const key = type + '_' + args.join('_');
+    if (!geoCache[key]) {
+        switch(type) {
+            case 'cylinder': geoCache[key] = new THREE.CylinderGeometry(args[0], args[1], args[2], args[3]); break;
+            case 'box': geoCache[key] = new THREE.BoxGeometry(args[0], args[1], args[2]); break;
+            case 'sphere': geoCache[key] = new THREE.SphereGeometry(args[0], args[1], args[2]); break;
+            case 'cone': geoCache[key] = new THREE.ConeGeometry(args[0], args[1], args[2]); break;
+        }
+    }
+    return geoCache[key];
+}
+
+const matCache = {};
+function getMat(color, opts = {}) {
+    const key = color + '_' + JSON.stringify(opts);
+    if (!matCache[key]) {
+        matCache[key] = new THREE.MeshLambertMaterial({ color, ...opts });
+    }
+    return matCache[key];
+}
+
+// ─── BUILD ARENA ───
+function buildArena() {
+    // Clear existing
+    for (const k in grid) {
+        const t = grid[k];
+        if (t.floorMesh) scene.remove(t.floorMesh);
+        if (t.wallMesh) scene.remove(t.wallMesh);
+        if (t.blockMesh) scene.remove(t.blockMesh);
+    }
+    grid = {};
+
+    for (let q = -GRID_RADIUS; q <= GRID_RADIUS; q++) {
+        for (let r = -GRID_RADIUS; r <= GRID_RADIUS; r++) {
+            if (hexDist(q, r, 0, 0) > GRID_RADIUS) continue;
+            const type = getTileType(q, r);
+            if (type === 'NONE') continue;
+            const pos = hexToWorld(q, r);
+            const key = hexKey(q, r);
+
+            const tile = { q, r, type, bomb: null, powerup: null, floorMesh: null, wallMesh: null, blockMesh: null };
+
+            // Floor hex
+            const floorGeo = getGeo('cylinder', HEX_SIZE * 0.92, HEX_SIZE * 0.92, 0.15, 6);
+            const floorColor = type === 'WALL' ? 0x556655 : 0x55aa55;
+            const floor = new THREE.Mesh(floorGeo, getMat(floorColor));
+            floor.position.set(pos.x, -0.075, pos.z);
+            floor.rotation.y = Math.PI / 6;
+            floor.receiveShadow = true;
+            scene.add(floor);
+            tile.floorMesh = floor;
+
+            if (type === 'WALL') {
+                const wallGeo = getGeo('box', 0.8, 0.8, 0.8);
+                const wall = new THREE.Mesh(wallGeo, getMat(0x666677));
+                wall.position.set(pos.x, 0.4, pos.z);
+                wall.castShadow = true;
+                wall.receiveShadow = true;
+                scene.add(wall);
+                tile.wallMesh = wall;
+            } else if (type === 'BLOCK') {
+                const blockGeo = getGeo('box', 0.75, 0.75, 0.75);
+                const block = new THREE.Mesh(blockGeo, getMat(0xbb8844));
+                block.position.set(pos.x, 0.375, pos.z);
+                block.castShadow = true;
+                block.receiveShadow = true;
+                scene.add(block);
+                tile.blockMesh = block;
+            }
+
+            grid[key] = tile;
+        }
+    }
+}
+
+// ─── ENTITY (PLAYER / BOT) ───
+function createEntityMesh(color) {
+    const group = new THREE.Group();
+
+    // Body
+    const bodyGeo = getGeo('box', 0.3, 0.45, 0.3);
+    const body = new THREE.Mesh(bodyGeo, getMat(color));
+    body.position.y = 0.35;
+    body.castShadow = true;
+    group.add(body);
+
+    // Head
+    const headGeo = getGeo('box', 0.25, 0.25, 0.25);
+    const head = new THREE.Mesh(headGeo, getMat(color));
+    head.position.y = 0.7;
+    head.castShadow = true;
+    group.add(head);
+
+    // Eyes
+    const eyeGeo = getGeo('box', 0.05, 0.05, 0.05);
+    const eyeMat = getMat(0x111111);
+    const eyeL = new THREE.Mesh(eyeGeo, eyeMat);
+    eyeL.position.set(-0.07, 0.73, 0.13);
+    group.add(eyeL);
+    const eyeR = new THREE.Mesh(eyeGeo, eyeMat);
+    eyeR.position.set(0.07, 0.73, 0.13);
+    group.add(eyeR);
+
+    return group;
+}
+
+function createEntity(index, q, r) {
+    const mesh = createEntityMesh(ENTITY_COLORS[index]);
+    const pos = hexToWorld(q, r);
+    mesh.position.set(pos.x, 0, pos.z);
+    scene.add(mesh);
+
+    return {
+        index,
+        q, r,
+        mesh,
+        alive: true,
+        moving: false,
+        fromQ: q, fromR: r,
+        moveT: 0,
+        moveSpeed: 0.2,
+        maxBombs: 1,
+        activeBombs: 0,
+        fireReach: 2,
+        isPlayer: index === 0,
+        aiTimer: 0.3 + index * 0.15,
+        aiInterval: 0.4 + Math.random() * 0.2,
+    };
+}
+
+// ─── BOMB VISUALS ───
+function createBombMesh() {
+    const group = new THREE.Group();
+    const sphere = new THREE.Mesh(
+        getGeo('sphere', 0.25, 12, 8),
+        getMat(0x222222)
+    );
+    sphere.position.y = 0.25;
+    sphere.castShadow = true;
+    group.add(sphere);
+
+    // Fuse tip
+    const fuse = new THREE.Mesh(
+        getGeo('sphere', 0.06, 6, 4),
+        getMat(0xff6600)
+    );
+    fuse.position.set(0, 0.52, 0);
+    group.add(fuse);
+
+    // Countdown ring
+    const ringGeo = new THREE.RingGeometry(0.35, 0.4, 24);
+    const ringMat = new THREE.MeshBasicMaterial({ color: 0xff4400, side: THREE.DoubleSide, transparent: true, opacity: 0.7 });
+    const ring = new THREE.Mesh(ringGeo, ringMat);
+    ring.rotation.x = -Math.PI / 2;
+    ring.position.y = 0.02;
+    group.add(ring);
+    group.userData.ring = ring;
+    group.userData.ringMat = ringMat;
+
+    group.visible = false;
+    scene.add(group);
+    return group;
+}
+
+function getBombMesh() {
+    for (const m of bombMeshPool) {
+        if (!m.visible) return m;
+    }
+    const m = createBombMesh();
+    bombMeshPool.push(m);
+    return m;
+}
+
+// ─── EXPLOSION VISUALS ───
+function createExplosionMesh() {
+    const geo = getGeo('box', 0.7, 0.35, 0.7);
+    const mat = new THREE.MeshBasicMaterial({ color: 0xff8800, transparent: true, opacity: 1 });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.position.y = 0.2;
+    mesh.visible = false;
+    scene.add(mesh);
+    mesh.userData.mat = mat;
+    return mesh;
+}
+
+function getExplosionMesh() {
+    for (const m of explosionMeshPool) {
+        if (!m.visible) return m;
+    }
+    const m = createExplosionMesh();
+    explosionMeshPool.push(m);
+    return m;
+}
+
+// ─── POWER-UP VISUALS ───
+function createPowerupMesh(type) {
+    let mesh;
+    switch (type) {
+        case 'bomb': {
+            mesh = new THREE.Mesh(getGeo('sphere', 0.15, 8, 6), getMat(0xff2222));
+            break;
+        }
+        case 'fire': {
+            mesh = new THREE.Mesh(getGeo('cone', 0.13, 0.3, 6), getMat(0xff8800));
+            break;
+        }
+        case 'speed': {
+            mesh = new THREE.Mesh(getGeo('box', 0.2, 0.2, 0.2), getMat(0x2288ff));
+            break;
+        }
+    }
+    mesh.position.y = 0.35;
+    mesh.userData.type = type;
+    mesh.userData.time = 0;
+    scene.add(mesh);
+    return mesh;
+}
+
+// ─── PARTICLES ───
+let particles = [];
+function spawnParticles(worldX, worldZ, color) {
+    for (let i = 0; i < 5; i++) {
+        const geo = getGeo('box', 0.08, 0.08, 0.08);
+        const mat = new THREE.MeshLambertMaterial({ color });
+        const m = new THREE.Mesh(geo, mat);
+        m.position.set(worldX, 0.5, worldZ);
+        const vel = new THREE.Vector3(
+            (Math.random() - 0.5) * 3,
+            2 + Math.random() * 3,
+            (Math.random() - 0.5) * 3
+        );
+        scene.add(m);
+        particles.push({ mesh: m, vel, life: 0.8 });
+    }
+}
+
+function updateParticles(dt) {
+    for (let i = particles.length - 1; i >= 0; i--) {
+        const p = particles[i];
+        p.vel.y -= 12 * dt;
+        p.mesh.position.add(p.vel.clone().multiplyScalar(dt));
+        p.mesh.rotation.x += dt * 5;
+        p.mesh.rotation.z += dt * 3;
+        p.life -= dt;
+        if (p.life <= 0) {
+            scene.remove(p.mesh);
+            p.mesh.geometry !== undefined; // keep cached geo
+            particles.splice(i, 1);
+        }
+    }
+}
+
+// ─── POPUP TEXT ───
+function showPopup(text, color, screenX, screenY) {
+    const div = document.createElement('div');
+    div.className = 'popup';
+    div.textContent = text;
+    div.style.color = color;
+    div.style.left = screenX + 'px';
+    div.style.top = screenY + 'px';
+    document.body.appendChild(div);
+    setTimeout(() => {
+        div.style.transition = 'transform 0.5s, opacity 0.5s';
+        div.style.transform = 'translate(-50%, -80px) scale(1.2)';
+        div.style.opacity = '0';
+    }, 300);
+    setTimeout(() => div.remove(), 800);
+}
+
+function worldToScreen(x, y, z) {
+    const v = new THREE.Vector3(x, y, z);
+    v.project(camera);
+    return {
+        x: (v.x * 0.5 + 0.5) * window.innerWidth,
+        y: (-v.y * 0.5 + 0.5) * window.innerHeight
+    };
+}
+
+// ─── GAME LOGIC ───
+function placeBomb(entity) {
+    if (!entity.alive || gameState !== 'PLAYING') return;
+    if (entity.activeBombs >= entity.maxBombs) return;
+    const key = hexKey(entity.q, entity.r);
+    const tile = grid[key];
+    if (!tile || tile.bomb) return;
+
+    entity.activeBombs++;
+
+    const mesh = getBombMesh();
+    const pos = hexToWorld(entity.q, entity.r);
+    mesh.position.set(pos.x, 0, pos.z);
+    mesh.visible = true;
+    mesh.scale.set(1, 1, 1);
+
+    const bomb = {
+        q: entity.q, r: entity.r,
+        owner: entity,
+        timer: 3.0,
+        reach: entity.fireReach,
+        mesh,
+    };
+    tile.bomb = bomb;
+    activeBombs.push(bomb);
+}
+
+function explodeBomb(bomb) {
+    const affected = [{ q: bomb.q, r: bomb.r }];
+
+    for (const dir of HEX_DIRS) {
+        for (let dist = 1; dist <= bomb.reach; dist++) {
+            const eq = bomb.q + dir.q * dist;
+            const er = bomb.r + dir.r * dist;
+            const key = hexKey(eq, er);
+            const tile = grid[key];
+            if (!tile || tile.type === 'WALL') break;
+            affected.push({ q: eq, r: er });
+            if (tile.type === 'BLOCK') {
+                destroyBlock(eq, er);
+                break;
+            }
+            if (tile.bomb && tile.bomb !== bomb) {
+                tile.bomb.timer = 0; // chain reaction
+            }
+        }
+    }
+
+    // Show explosions
+    for (const hex of affected) {
+        const pos = hexToWorld(hex.q, hex.r);
+        const exMesh = getExplosionMesh();
+        exMesh.position.set(pos.x, 0.2, pos.z);
+        exMesh.visible = true;
+        exMesh.userData.mat.opacity = 1;
+        exMesh.scale.set(1, 1, 1);
+        // Alternate colors for visual interest
+        const isCenter = hex.q === bomb.q && hex.r === bomb.r;
+        exMesh.userData.mat.color.setHex(isCenter ? 0xffcc00 : 0xff6600);
+        activeExplosions.push({ mesh: exMesh, timer: 0.5, q: hex.q, r: hex.r });
+    }
+
+    // Check kills
+    for (const hex of affected) {
+        for (const entity of entities) {
+            if (entity.alive && entity.q === hex.q && entity.r === hex.r) {
+                killEntity(entity);
+            }
+        }
+    }
+
+    // Clean up bomb
+    const key = hexKey(bomb.q, bomb.r);
+    if (grid[key]) grid[key].bomb = null;
+    bomb.mesh.visible = false;
+    bomb.owner.activeBombs = Math.max(0, bomb.owner.activeBombs - 1);
+}
+
+function destroyBlock(q, r) {
+    const key = hexKey(q, r);
+    const tile = grid[key];
+    if (!tile || tile.type !== 'BLOCK') return;
+
+    tile.type = 'EMPTY';
+    if (tile.blockMesh) {
+        const pos = hexToWorld(q, r);
+        spawnParticles(pos.x, pos.z, 0xbb8844);
+        scene.remove(tile.blockMesh);
+        tile.blockMesh = null;
+    }
+
+    // Chance to spawn power-up
+    if (Math.random() < 0.3) {
+        spawnPowerup(q, r);
+    }
+}
+
+function spawnPowerup(q, r) {
+    const types = ['bomb', 'fire', 'speed'];
+    const type = types[Math.floor(Math.random() * types.length)];
+    const mesh = createPowerupMesh(type);
+    const pos = hexToWorld(q, r);
+    mesh.position.set(pos.x, 0.35, pos.z);
+    const key = hexKey(q, r);
+    grid[key].powerup = { type, mesh, q, r };
+    activePowerups.push(grid[key].powerup);
+}
+
+function collectPowerup(entity, pu) {
+    const key = hexKey(pu.q, pu.r);
+    grid[key].powerup = null;
+    scene.remove(pu.mesh);
+    const idx = activePowerups.indexOf(pu);
+    if (idx >= 0) activePowerups.splice(idx, 1);
+
+    let text = '';
+    let color = '#fff';
+    switch (pu.type) {
+        case 'bomb':
+            entity.maxBombs = Math.min(entity.maxBombs + 1, 5);
+            text = '+BOMB';
+            color = '#ff4444';
+            break;
+        case 'fire':
+            entity.fireReach = Math.min(entity.fireReach + 1, 5);
+            text = '+FIRE';
+            color = '#ff8800';
+            break;
+        case 'speed':
+            entity.moveSpeed = Math.max(entity.moveSpeed - 0.025, 0.1);
+            text = '+SPEED';
+            color = '#4488ff';
+            break;
+    }
+
+    const pos = hexToWorld(pu.q, pu.r);
+    const sp = worldToScreen(pos.x, 1.2, pos.z);
+    showPopup(text, color, sp.x, sp.y);
+}
+
+function killEntity(entity) {
+    if (!entity.alive) return;
+    entity.alive = false;
+    entity.mesh.visible = false;
+
+    const pos = hexToWorld(entity.q, entity.r);
+    spawnParticles(pos.x, pos.z, ENTITY_COLORS[entity.index]);
+
+    checkRoundEnd();
+}
+
+function checkRoundEnd() {
+    if (gameState !== 'PLAYING') return;
+    const alive = entities.filter(e => e.alive);
+    if (alive.length <= 1) {
+        gameState = 'ROUND_END';
+        if (alive.length === 1) {
+            wins[alive[0].index]++;
+            showCenter(ENTITY_NAMES[alive[0].index] + ' WINS!', '#ffcc00');
+        } else {
+            showCenter('DRAW!', '#ff8888');
+        }
+        setTimeout(() => {
+            const maxWins = Math.max(...wins);
+            if (maxWins >= ROUNDS_TO_WIN) {
+                endGame();
+            } else {
+                currentRound++;
+                startRound();
+            }
+        }, 2500);
+    }
+}
+
+function showCenter(text, color) {
+    centerMsg.textContent = text;
+    centerMsg.style.color = color || '#fff';
+    centerMsg.style.display = 'block';
+}
+function hideCenter() {
+    centerMsg.style.display = 'none';
+}
+
+// ─── MOVEMENT ───
+function tryMove(entity, dir) {
+    if (entity.moving || !entity.alive) return false;
+    const nq = entity.q + dir.q;
+    const nr = entity.r + dir.r;
+    const key = hexKey(nq, nr);
+    const tile = grid[key];
+    if (!tile || tile.type === 'WALL' || tile.type === 'BLOCK') return false;
+    if (tile.bomb) return false;
+
+    entity.moving = true;
+    entity.fromQ = entity.q;
+    entity.fromR = entity.r;
+    entity.q = nq;
+    entity.r = nr;
+    entity.moveT = 0;
+    return true;
+}
+
+function updateEntityMovement(entity, dt) {
+    if (!entity.moving || !entity.alive) return;
+    entity.moveT += dt / entity.moveSpeed;
+    if (entity.moveT >= 1) {
+        entity.moveT = 1;
+        entity.moving = false;
+
+        // Check powerup at destination
+        const key = hexKey(entity.q, entity.r);
+        const tile = grid[key];
+        if (tile && tile.powerup) {
+            collectPowerup(entity, tile.powerup);
+        }
+    }
+
+    const from = hexToWorld(entity.fromQ, entity.fromR);
+    const to = hexToWorld(entity.q, entity.r);
+    const t = smoothstep(entity.moveT);
+    entity.mesh.position.x = from.x + (to.x - from.x) * t;
+    entity.mesh.position.z = from.z + (to.z - from.z) * t;
+
+    // Face movement direction
+    const dx = to.x - from.x;
+    const dz = to.z - from.z;
+    if (Math.abs(dx) > 0.01 || Math.abs(dz) > 0.01) {
+        entity.mesh.rotation.y = Math.atan2(dx, dz);
+    }
+}
+
+function smoothstep(t) {
+    return t * t * (3 - 2 * t);
+}
+
+// ─── AI ───
+function isInDanger(q, r) {
+    // Check if hex is in any active bomb's blast radius
+    for (const bomb of activeBombs) {
+        if (bomb.q === q && bomb.r === r) return true;
+        for (const dir of HEX_DIRS) {
+            for (let dist = 1; dist <= bomb.reach; dist++) {
+                const eq = bomb.q + dir.q * dist;
+                const er = bomb.r + dir.r * dist;
+                if (eq === q && er === r) return true;
+                const key = hexKey(eq, er);
+                const tile = grid[key];
+                if (!tile || tile.type === 'WALL' || tile.type === 'BLOCK') break;
+            }
+        }
+    }
+    // Check active explosions
+    for (const ex of activeExplosions) {
+        if (ex.q === q && ex.r === r) return true;
+    }
+    return false;
+}
+
+function isSafeHex(q, r) {
+    const key = hexKey(q, r);
+    const tile = grid[key];
+    if (!tile || tile.type === 'WALL' || tile.type === 'BLOCK') return false;
+    if (tile.bomb) return false;
+    return !isInDanger(q, r);
+}
+
+function isWalkable(q, r) {
+    const key = hexKey(q, r);
+    const tile = grid[key];
+    if (!tile || tile.type === 'WALL' || tile.type === 'BLOCK') return false;
+    if (tile.bomb) return false;
+    return true;
+}
+
+function hasAdjacentBlock(q, r) {
+    for (const dir of HEX_DIRS) {
+        const nk = hexKey(q + dir.q, r + dir.r);
+        const tile = grid[nk];
+        if (tile && tile.type === 'BLOCK') return true;
+    }
+    return false;
+}
+
+function updateAI(entity, dt) {
+    if (!entity.alive || entity.moving || gameState !== 'PLAYING') return;
+
+    entity.aiTimer -= dt;
+    if (entity.aiTimer > 0) return;
+    entity.aiTimer = entity.aiInterval + Math.random() * 0.15;
+
+    const inDanger = isInDanger(entity.q, entity.r);
+
+    // Priority 1: Flee danger
+    if (inDanger) {
+        const safeDirs = HEX_DIRS.filter(d => {
+            const nq = entity.q + d.q;
+            const nr = entity.r + d.r;
+            return isWalkable(nq, nr) && isSafeHex(nq, nr);
+        });
+        if (safeDirs.length > 0) {
+            const dir = safeDirs[Math.floor(Math.random() * safeDirs.length)];
+            tryMove(entity, dir);
+            return;
+        }
+        // Even an unsafe move is better than standing on a bomb
+        const anyDirs = HEX_DIRS.filter(d => isWalkable(entity.q + d.q, entity.r + d.r));
+        if (anyDirs.length > 0) {
+            tryMove(entity, anyDirs[Math.floor(Math.random() * anyDirs.length)]);
+            return;
+        }
+        return;
+    }
+
+    // Priority 2: Place bomb near blocks if safe escape exists
+    if (hasAdjacentBlock(entity.q, entity.r) && entity.activeBombs < entity.maxBombs && Math.random() < 0.25) {
+        // Check we can escape after placing
+        const escapeDirs = HEX_DIRS.filter(d => {
+            const nq = entity.q + d.q;
+            const nr = entity.r + d.r;
+            return isWalkable(nq, nr) && isSafeHex(nq, nr);
+        });
+        if (escapeDirs.length > 0) {
+            placeBomb(entity);
+            const dir = escapeDirs[Math.floor(Math.random() * escapeDirs.length)];
+            tryMove(entity, dir);
+            return;
+        }
+    }
+
+    // Priority 3: Move toward nearest block (aggression)
+    if (Math.random() < 0.5) {
+        let bestDir = null;
+        let bestDist = 999;
+        for (const dir of HEX_DIRS) {
+            const nq = entity.q + dir.q;
+            const nr = entity.r + dir.r;
+            if (!isWalkable(nq, nr)) continue;
+            if (!isSafeHex(nq, nr)) continue;
+            // Find distance to nearest block
+            for (const k in grid) {
+                const t = grid[k];
+                if (t.type === 'BLOCK') {
+                    const d = hexDist(nq, nr, t.q, t.r);
+                    if (d < bestDist) {
+                        bestDist = d;
+                        bestDir = dir;
+                    }
+                }
+            }
+        }
+        if (bestDir && bestDist < 8) {
+            tryMove(entity, bestDir);
+            return;
+        }
+    }
+
+    // Priority 4: Random movement
+    const walkable = HEX_DIRS.filter(d => {
+        const nq = entity.q + d.q;
+        const nr = entity.r + d.r;
+        return isWalkable(nq, nr) && isSafeHex(nq, nr);
+    });
+    if (walkable.length > 0) {
+        const dir = walkable[Math.floor(Math.random() * walkable.length)];
+        tryMove(entity, dir);
+    }
+}
+
+// ─── DIRECTION SNAPPING ───
+function snapToHexDir(screenAngle) {
+    // The isometric camera at (15,15,15) looks toward origin.
+    // On screen: right ~ +q, down ~ +r in a hex sense
+    // We need to adjust the screen angle to match hex dirs projected to screen.
+    // Camera is at 45 deg azimuth. World X axis appears going to the right and slightly up.
+    // We compute the projected screen angles of each hex direction and find the nearest.
+
+    // Precompute projected directions
+    let bestIdx = 0;
+    let bestDot = -Infinity;
+    const sx = Math.cos(screenAngle);
+    const sy = Math.sin(screenAngle);
+
+    for (let i = 0; i < HEX_DIRS.length; i++) {
+        const d = HEX_DIRS[i];
+        const wpos = hexToWorld(d.q, d.r);
+        // Project to screen
+        const v = new THREE.Vector3(wpos.x, 0, wpos.z);
+        v.project(camera);
+        const len = Math.hypot(v.x, v.y);
+        if (len < 0.001) continue;
+        const dot = sx * (v.x / len) + sy * (v.y / len);
+        // Note: screen y is inverted (up is negative in NDC for screen coords)
+        // Actually project() gives NDC where y up is positive, and our screenAngle
+        // comes from touch where y down is positive, so we flip:
+        const dot2 = sx * (v.x / len) + sy * (-v.y / len);
+        if (dot2 > bestDot) {
+            bestDot = dot2;
+            bestIdx = i;
+        }
+    }
+    return HEX_DIRS[bestIdx];
+}
+
+function keyToHexDir(key) {
+    // Map WASD/arrows to screen angles then snap
+    // Screen angles: right=0, down=PI/2, left=PI, up=-PI/2
+    let angle;
+    switch (key) {
+        case 'd': case 'arrowright': angle = 0; break;
+        case 's': case 'arrowdown': angle = Math.PI / 2; break;
+        case 'a': case 'arrowleft': angle = Math.PI; break;
+        case 'w': case 'arrowup': angle = -Math.PI / 2; break;
+        case 'q': angle = -Math.PI * 0.75; break; // up-left
+        case 'e': angle = -Math.PI * 0.25; break; // up-right
+        default: return null;
+    }
+    return snapToHexDir(angle);
+}
+
+// ─── INPUT ───
+let moveRepeatTimer = 0;
+const MOVE_REPEAT_DELAY = 0.05;
+
+document.addEventListener('touchstart', e => {
+    if (gameState === 'START') {
+        startScreen.style.display = 'none';
+        startGame();
+        return;
+    }
+    if (gameState === 'GAME_OVER') {
+        gameoverScreen.style.display = 'none';
+        resetFullGame();
+        return;
+    }
+
+    for (const touch of e.changedTouches) {
+        const x = touch.clientX;
+        if (x < window.innerWidth * 0.6 && joystickTouch === null) {
+            joystickTouch = touch.identifier;
+            joystickOrigin = { x: touch.clientX, y: touch.clientY };
+            joystickCanvas.style.opacity = '1';
+        }
+    }
+}, { passive: true });
+
+document.addEventListener('touchmove', e => {
+    e.preventDefault();
+    for (const touch of e.changedTouches) {
+        if (touch.identifier === joystickTouch) {
+            const dx = touch.clientX - joystickOrigin.x;
+            const dy = touch.clientY - joystickOrigin.y;
+            const dist = Math.hypot(dx, dy);
+            if (dist > 15) {
+                const angle = Math.atan2(dy, dx);
+                moveDir = snapToHexDir(angle);
+                drawJoystick(joystickOrigin.x, joystickOrigin.y, dx, dy, dist);
+            } else {
+                moveDir = null;
+                drawJoystickIdle(joystickOrigin.x, joystickOrigin.y);
+            }
+        }
+    }
+}, { passive: false });
+
+document.addEventListener('touchend', e => {
+    for (const touch of e.changedTouches) {
+        if (touch.identifier === joystickTouch) {
+            joystickTouch = null;
+            joystickOrigin = null;
+            moveDir = null;
+            joystickCanvas.style.opacity = '0';
+            jCtx.clearRect(0, 0, joystickCanvas.width, joystickCanvas.height);
+        }
+    }
+}, { passive: true });
+
+// Bomb button
+bombBtn.addEventListener('touchstart', e => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (gameState === 'PLAYING') placeBomb(player);
+}, { passive: false });
+bombBtn.addEventListener('click', e => {
+    e.stopPropagation();
+    if (gameState === 'PLAYING') placeBomb(player);
+});
+
+// Click for start/gameover screens
+document.addEventListener('click', e => {
+    if (gameState === 'START') {
+        startScreen.style.display = 'none';
+        startGame();
+    } else if (gameState === 'GAME_OVER') {
+        gameoverScreen.style.display = 'none';
+        resetFullGame();
+    }
+});
+
+// Keyboard
+document.addEventListener('keydown', e => {
+    const k = e.key.toLowerCase();
+    if (gameState === 'START') { startScreen.style.display = 'none'; startGame(); return; }
+    if (gameState === 'GAME_OVER') { gameoverScreen.style.display = 'none'; resetFullGame(); return; }
+    if (k === ' ' || k === 'spacebar') {
+        e.preventDefault();
+        if (gameState === 'PLAYING') placeBomb(player);
+        return;
+    }
+    if (!keysDown[k]) {
+        keysDown[k] = true;
+        // Immediate move on first press
+        const dir = keyToHexDir(k);
+        if (dir && gameState === 'PLAYING') {
+            tryMove(player, dir);
+            moveRepeatTimer = 0.18; // initial delay before repeat
+        }
+    }
+});
+
+document.addEventListener('keyup', e => {
+    keysDown[e.key.toLowerCase()] = false;
+});
+
+// ─── JOYSTICK DRAWING ───
+function resizeJoystickCanvas() {
+    joystickCanvas.width = joystickCanvas.offsetWidth * window.devicePixelRatio;
+    joystickCanvas.height = joystickCanvas.offsetHeight * window.devicePixelRatio;
+    jCtx.scale(window.devicePixelRatio, window.devicePixelRatio);
+}
+resizeJoystickCanvas();
+window.addEventListener('resize', resizeJoystickCanvas);
+
+function drawJoystick(ox, oy, dx, dy, dist) {
+    const w = joystickCanvas.offsetWidth;
+    const h = joystickCanvas.offsetHeight;
+    jCtx.clearRect(0, 0, w, h);
+
+    // Convert page coords to canvas local coords
+    const rect = joystickCanvas.getBoundingClientRect();
+    const lx = ox - rect.left;
+    const ly = oy - rect.top;
+
+    // Outer ring
+    jCtx.beginPath();
+    jCtx.arc(lx, ly, 40, 0, Math.PI * 2);
+    jCtx.strokeStyle = 'rgba(255,255,255,0.4)';
+    jCtx.lineWidth = 2;
+    jCtx.stroke();
+
+    // Inner dot (clamped)
+    const maxDist = 35;
+    const clampDist = Math.min(dist, maxDist);
+    const angle = Math.atan2(dy, dx);
+    const ix = lx + Math.cos(angle) * clampDist;
+    const iy = ly + Math.sin(angle) * clampDist;
+
+    jCtx.beginPath();
+    jCtx.arc(ix, iy, 14, 0, Math.PI * 2);
+    jCtx.fillStyle = 'rgba(255,255,255,0.6)';
+    jCtx.fill();
+}
+
+function drawJoystickIdle(ox, oy) {
+    const w = joystickCanvas.offsetWidth;
+    const h = joystickCanvas.offsetHeight;
+    jCtx.clearRect(0, 0, w, h);
+    const rect = joystickCanvas.getBoundingClientRect();
+    const lx = ox - rect.left;
+    const ly = oy - rect.top;
+    jCtx.beginPath();
+    jCtx.arc(lx, ly, 40, 0, Math.PI * 2);
+    jCtx.strokeStyle = 'rgba(255,255,255,0.3)';
+    jCtx.lineWidth = 2;
+    jCtx.stroke();
+    jCtx.beginPath();
+    jCtx.arc(lx, ly, 14, 0, Math.PI * 2);
+    jCtx.fillStyle = 'rgba(255,255,255,0.4)';
+    jCtx.fill();
+}
+
+// ─── ARENA SHRINK ───
+function shrinkArena(dt) {
+    if (roundTimer > 0) return;
+    shrinkTimer -= dt;
+    if (shrinkTimer <= 0 && shrinkRing > 0) {
+        shrinkRing--;
+        shrinkTimer = 2; // shrink one ring every 2 seconds
+        // Turn all hexes at shrinkRing+1 into fire
+        for (const k in grid) {
+            const t = grid[k];
+            const d = hexDist(t.q, t.r, 0, 0);
+            if (d === shrinkRing + 1) {
+                // Create explosion on this hex
+                if (t.type !== 'WALL' || d < GRID_RADIUS) {
+                    const pos = hexToWorld(t.q, t.r);
+                    const exMesh = getExplosionMesh();
+                    exMesh.position.set(pos.x, 0.2, pos.z);
+                    exMesh.visible = true;
+                    exMesh.userData.mat.opacity = 1;
+                    exMesh.userData.mat.color.setHex(0xff2200);
+                    activeExplosions.push({ mesh: exMesh, timer: 1.5, q: t.q, r: t.r });
+
+                    // Kill entities
+                    for (const entity of entities) {
+                        if (entity.alive && entity.q === t.q && entity.r === t.r) {
+                            killEntity(entity);
+                        }
+                    }
+
+                    // Destroy blocks
+                    if (t.type === 'BLOCK') {
+                        destroyBlock(t.q, t.r);
+                    }
+                    // Make it a wall so nobody walks in
+                    t.type = 'WALL';
+                    if (!t.wallMesh) {
+                        const wallGeo = getGeo('box', 0.8, 0.3, 0.8);
+                        const wall = new THREE.Mesh(wallGeo, getMat(0x882200));
+                        wall.position.set(pos.x, 0.15, pos.z);
+                        scene.add(wall);
+                        t.wallMesh = wall;
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ─── HUD UPDATE ───
+function updateHUD() {
+    // Timer
+    const t = Math.max(0, Math.ceil(roundTimer));
+    const mins = Math.floor(t / 60);
+    const secs = t % 60;
+    timerEl.textContent = mins + ':' + (secs < 10 ? '0' : '') + secs;
+    if (roundTimer <= 10 && roundTimer > 0) {
+        timerEl.style.color = '#ff4444';
+    } else if (roundTimer <= 0) {
+        timerEl.style.color = '#ff0000';
+        timerEl.textContent = 'SHRINKING!';
+    } else {
+        timerEl.style.color = '#fff';
+    }
+
+    // Round
+    roundEl.textContent = 'ROUND ' + currentRound + ' / 3';
+
+    // Stats
+    let html = '';
+    for (let i = 0; i < entities.length; i++) {
+        const e = entities[i];
+        const col = '#' + ENTITY_COLORS[i].toString(16).padStart(6, '0');
+        const op = e.alive ? '1' : '0.3';
+        if (i === 0) {
+            html += `<span style="color:${col};opacity:${op}">YOU B:${e.maxBombs} F:${e.fireReach} [${wins[i]}]</span>`;
+        } else {
+            html += `<span style="color:${col};opacity:${op}">${ENTITY_NAMES[i]} [${wins[i]}]</span>`;
+        }
+    }
+    statsEl.innerHTML = html;
+}
+
+// ─── GAME FLOW ───
+function resetFullGame() {
+    wins = [0, 0, 0, 0];
+    currentRound = 1;
+    startGame();
+}
+
+function startGame() {
+    gameState = 'COUNTDOWN';
+    startRound();
+}
+
+function startRound() {
+    // Clear everything
+    for (const b of activeBombs) { b.mesh.visible = false; }
+    activeBombs = [];
+    for (const ex of activeExplosions) { ex.mesh.visible = false; }
+    activeExplosions = [];
+    for (const pu of activePowerups) { scene.remove(pu.mesh); }
+    activePowerups = [];
+    for (const p of particles) { scene.remove(p.mesh); }
+    particles = [];
+    for (const e of entities) { scene.remove(e.mesh); }
+    entities = [];
+
+    roundTimer = ROUND_TIME;
+    shrinkRing = GRID_RADIUS;
+    shrinkTimer = 2;
+
+    buildArena();
+
+    // Create entities
+    for (let i = 0; i < 4; i++) {
+        entities.push(createEntity(i, SPAWNS[i].q, SPAWNS[i].r));
+    }
+    player = entities[0];
+
+    // Countdown
+    gameState = 'COUNTDOWN';
+    hideCenter();
+    let count = 3;
+    showCenter('' + count, '#ffcc00');
+
+    const countInterval = setInterval(() => {
+        count--;
+        if (count > 0) {
+            showCenter('' + count, '#ffcc00');
+        } else if (count === 0) {
+            showCenter('GO!', '#44ff44');
+        } else {
+            hideCenter();
+            gameState = 'PLAYING';
+            clearInterval(countInterval);
+        }
+    }, 800);
+}
+
+function endGame() {
+    gameState = 'GAME_OVER';
+    hideCenter();
+
+    // Determine overall winner
+    const maxW = Math.max(...wins);
+    const winners = [];
+    for (let i = 0; i < 4; i++) {
+        if (wins[i] === maxW) winners.push(i);
+    }
+    if (winners.length === 1) {
+        winnerEl.textContent = ENTITY_NAMES[winners[0]] + (winners[0] === 0 ? ' WIN!' : ' WINS!');
+        winnerEl.style.color = winners[0] === 0 ? '#44ff44' : '#ffcc00';
+    } else {
+        winnerEl.textContent = 'DRAW!';
+        winnerEl.style.color = '#ff8888';
+    }
+
+    let sHtml = '';
+    for (let i = 0; i < 4; i++) {
+        const col = '#' + ENTITY_COLORS[i].toString(16).padStart(6, '0');
+        sHtml += `<div style="color:${col}">${ENTITY_NAMES[i]}: ${wins[i]} wins</div>`;
+    }
+    standingsEl.innerHTML = sHtml;
+
+    gameoverScreen.style.display = 'flex';
+}
+
+// ─── MAIN LOOP ───
+function update(dt) {
+    if (gameState !== 'PLAYING') {
+        // Still animate things during countdown etc
+        for (const e of entities) updateEntityMovement(e, dt);
+        updateParticles(dt);
+        updateExplosions(dt);
+        updateBombVisuals(dt);
+        updatePowerupVisuals(dt);
+        updateHUD();
+        return;
+    }
+
+    // Timer
+    roundTimer -= dt;
+    shrinkArena(dt);
+
+    // Player input from joystick
+    if (moveDir && player.alive && !player.moving) {
+        tryMove(player, moveDir);
+    }
+
+    // Keyboard repeat
+    if (player.alive && !player.moving) {
+        moveRepeatTimer -= dt;
+        if (moveRepeatTimer <= 0) {
+            for (const k of ['w','a','s','d','q','e','arrowup','arrowdown','arrowleft','arrowright']) {
+                if (keysDown[k]) {
+                    const dir = keyToHexDir(k);
+                    if (dir) {
+                        tryMove(player, dir);
+                        moveRepeatTimer = MOVE_REPEAT_DELAY;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    // Update entities
+    for (const e of entities) {
+        updateEntityMovement(e, dt);
+        if (!e.isPlayer) updateAI(e, dt);
+    }
+
+    // Update bombs
+    for (let i = activeBombs.length - 1; i >= 0; i--) {
+        const b = activeBombs[i];
+        b.timer -= dt;
+        if (b.timer <= 0) {
+            explodeBomb(b);
+            activeBombs.splice(i, 1);
+        }
+    }
+
+    updateBombVisuals(dt);
+    updateExplosions(dt);
+    updateParticles(dt);
+    updatePowerupVisuals(dt);
+    updateHUD();
+}
+
+function updateBombVisuals(dt) {
+    for (const b of activeBombs) {
+        // Pulsing
+        const pulse = 1 + Math.sin(b.timer * 8) * 0.08;
+        b.mesh.scale.set(pulse, pulse, pulse);
+        // Ring shrink
+        if (b.mesh.userData.ring) {
+            const frac = b.timer / 3;
+            b.mesh.userData.ring.scale.set(frac, frac, 1);
+            b.mesh.userData.ringMat.opacity = 0.3 + frac * 0.5;
+        }
+    }
+}
+
+function updateExplosions(dt) {
+    for (let i = activeExplosions.length - 1; i >= 0; i--) {
+        const ex = activeExplosions[i];
+        ex.timer -= dt;
+        if (ex.timer <= 0) {
+            ex.mesh.visible = false;
+            activeExplosions.splice(i, 1);
+        } else {
+            // Fade out
+            ex.mesh.userData.mat.opacity = Math.min(1, ex.timer / 0.2);
+            // Slight upward float
+            ex.mesh.position.y = 0.2 + (0.5 - ex.timer) * 0.3;
+            // Pulsing scale
+            const s = 1 + Math.sin(ex.timer * 15) * 0.05;
+            ex.mesh.scale.set(s, s, s);
+
+            // Continue to check kills for lingering explosions
+            for (const entity of entities) {
+                if (entity.alive && entity.q === ex.q && entity.r === ex.r) {
+                    killEntity(entity);
+                }
+            }
+        }
+    }
+}
+
+function updatePowerupVisuals(dt) {
+    for (const pu of activePowerups) {
+        pu.mesh.userData.time += dt;
+        pu.mesh.position.y = 0.35 + Math.sin(pu.mesh.userData.time * 3) * 0.1;
+        pu.mesh.rotation.y += dt * 2;
+    }
+}
+
+// ─── PRE-ALLOCATE POOLS ───
+function initPools() {
+    for (let i = 0; i < 12; i++) bombMeshPool.push(createBombMesh());
+    for (let i = 0; i < 50; i++) explosionMeshPool.push(createExplosionMesh());
+}
+
+// ─── INIT & RUN ───
+function init() {
+    initThree();
+    initPools();
+
+    // Build initial arena for the start screen background
+    buildArena();
+    for (let i = 0; i < 4; i++) {
+        entities.push(createEntity(i, SPAWNS[i].q, SPAWNS[i].r));
+    }
+    player = entities[0];
+
+    function gameLoop() {
+        requestAnimationFrame(gameLoop);
+        const dt = Math.min(clock.getDelta(), 0.05); // cap delta
+        update(dt);
+        renderer.render(scene, camera);
+    }
+    gameLoop();
+}
+
+init();
+
+</script>
+</body>
+</html>
