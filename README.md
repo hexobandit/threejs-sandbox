@@ -1,7 +1,9 @@
 # threejs-sandbox
 
-22 visual mockups exploring Three.js + Canvas 2D for mobile-first multiplayer games.
+27 visual mockups + 7 playable games. Three.js & Canvas 2D, mobile-first.
 
 **Open `index.html` in browser.** No build step.
 
-Covers: hex strategy, flight combat, racing, arcade remakes, carrier battles, and more.
+**Mockups:** hex strategy, flight combat, racing, Pacman, Bomberman, Tron, Prince of Persia, Starcraft, Soldat, Mini Motorways, Plague Inc, carrier battles, cyber warfare, canyon runs.
+
+**Playable games:** X-Wing shooter, Bomberman Hex, Prince of Persia 2050, Blocky Racer, Hexcom TD (3D + 2D), Carrier Battle command.
