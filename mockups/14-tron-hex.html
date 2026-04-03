@@ -1,0 +1,742 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>14 — Tron Hex</title>
+    <style>
+        *{margin:0;padding:0}body{overflow:hidden;background:#000;touch-action:none}canvas{display:block}
+        #ui{position:fixed;top:0;left:0;padding:12px;font-family:'Courier New',monospace;color:#00ffff;pointer-events:none;z-index:10}
+        #ui h1{font-size:14px;color:#00ffff;margin-bottom:4px}
+        #stats{font-size:11px;color:#00ffff;margin-top:4px}
+        #back{position:fixed;top:12px;right:12px;font-family:'Courier New',monospace;font-size:12px;color:#00ffff;text-decoration:none;z-index:10}
+        #back:hover{color:#fff}
+        #bottom-bar{position:fixed;bottom:0;left:0;right:0;padding:10px 16px;font-family:'Courier New',monospace;font-size:11px;color:#00ffff;background:rgba(0,20,30,0.7);border-top:1px solid #003344;z-index:10;display:flex;align-items:center;gap:16px;pointer-events:none}
+        .player-dot{display:inline-block;width:10px;height:10px;border:1px solid rgba(255,255,255,0.3)}
+        .player-dot.dead{position:relative}
+        .player-dot.dead::after{content:'';position:absolute;top:-1px;left:-1px;width:12px;height:12px;background:linear-gradient(45deg,transparent 45%,#ff0000 45%,#ff0000 55%,transparent 55%),linear-gradient(-45deg,transparent 45%,#ff0000 45%,#ff0000 55%,transparent 55%);background-size:100% 100%}
+    </style>
+</head>
+<body>
+<div id="ui">
+    <h1>14 / TRON HEX</h1>
+    <div id="stats">-- FPS</div>
+</div>
+<a id="back" href="../index.html">&larr; back</a>
+<div id="bottom-bar">
+    <span>CYCLE BATTLE</span>
+    <span style="color:#446688">//</span>
+    <span>2 REMAINING</span>
+    <span style="color:#446688">//</span>
+    <span class="player-dot" style="background:#00ffff"></span><span>P1: CYAN ACTIVE</span>
+    <span style="color:#446688">//</span>
+    <span class="player-dot" style="background:#ff8800"></span><span>P2: ORANGE ACTIVE</span>
+    <span style="color:#446688">//</span>
+    <span class="player-dot dead" style="background:#ff00ff"></span><span style="color:#664466">P3: DEREZED</span>
+    <span style="color:#446688">//</span>
+    <span class="player-dot dead" style="background:#88ff00"></span><span style="color:#446644">P4: DEREZED</span>
+</div>
+<script type="importmap">
+{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"}}
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+// --- Renderer ---
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setClearColor(0x000000);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.0;
+document.body.appendChild(renderer.domElement);
+
+// --- Scene ---
+const scene = new THREE.Scene();
+
+// --- Orthographic Camera (mostly top-down, slight tilt) ---
+const frustum = 35;
+let aspect = window.innerWidth / window.innerHeight;
+const camera = new THREE.OrthographicCamera(
+    frustum * aspect / -2, frustum * aspect / 2,
+    frustum / 2, frustum / -2, 0.1, 200
+);
+camera.position.set(0, 40, 15);
+camera.lookAt(0, 0, 0);
+
+// --- Controls ---
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.05;
+controls.maxPolarAngle = Math.PI / 2.2;
+controls.minZoom = 0.4;
+controls.maxZoom = 3;
+
+// --- Ambient light (very subtle) ---
+scene.add(new THREE.AmbientLight(0x111122, 0.2));
+
+// =============================================
+// HEX GRID MATH
+// =============================================
+const S = 1.05; // hex spacing
+const HEX_R = 0.55; // visual hex radius for shape
+
+function hexToWorld(q, r) {
+    return {
+        x: S * 1.5 * q,
+        z: S * Math.sqrt(3) * (r + q / 2)
+    };
+}
+
+// Axial hex distance
+function hexDist(q1, r1, q2, r2) {
+    return (Math.abs(q1 - q2) + Math.abs(q1 + r1 - q2 - r2) + Math.abs(r1 - r2)) / 2;
+}
+
+// 6 axial neighbor directions
+const HEX_DIRS = [
+    [1, 0], [1, -1], [0, -1],
+    [-1, 0], [-1, 1], [0, 1]
+];
+
+// Get flat-top hex corner
+function hexCorner(cx, cz, r, i) {
+    const angle = Math.PI / 180 * (60 * i);
+    return { x: cx + r * Math.cos(angle), z: cz + r * Math.sin(angle) };
+}
+
+// =============================================
+// HEX GRID RENDERING
+// =============================================
+const GRID_RADIUS = 12;
+const gridGroup = new THREE.Group();
+scene.add(gridGroup);
+
+// Create a single flat hex shape for edges
+function createHexShape(radius) {
+    const shape = new THREE.Shape();
+    for (let i = 0; i <= 6; i++) {
+        const angle = Math.PI / 180 * (60 * (i % 6));
+        const x = radius * Math.cos(angle);
+        const y = radius * Math.sin(angle);
+        if (i === 0) shape.moveTo(x, y);
+        else shape.lineTo(x, y);
+    }
+    return shape;
+}
+
+const hexShape = createHexShape(HEX_R);
+const hexGeo = new THREE.ShapeGeometry(hexShape);
+const hexEdgesGeo = new THREE.EdgesGeometry(hexGeo);
+
+// Store all hex coords
+const allHexes = [];
+const boundaryHexes = new Set();
+
+for (let q = -GRID_RADIUS; q <= GRID_RADIUS; q++) {
+    for (let r = -GRID_RADIUS; r <= GRID_RADIUS; r++) {
+        const s = -q - r;
+        if (Math.abs(s) > GRID_RADIUS) continue;
+        const dist = hexDist(q, r, 0, 0);
+        if (dist > GRID_RADIUS) continue;
+
+        allHexes.push({ q, r });
+        const isBoundary = dist >= GRID_RADIUS - 1;
+        if (isBoundary) boundaryHexes.add(`${q},${r}`);
+
+        const { x, z } = hexToWorld(q, r);
+        const color = isBoundary ? 0x223344 : 0x112233;
+        const mat = new THREE.LineBasicMaterial({ color, transparent: true, opacity: isBoundary ? 0.7 : 0.4 });
+        const line = new THREE.LineSegments(hexEdgesGeo, mat);
+        line.position.set(x, 0, z);
+        line.rotation.x = -Math.PI / 2;
+        line.userData = { q, r, isBoundary, baseMat: mat, baseColor: color };
+        gridGroup.add(line);
+    }
+}
+
+// =============================================
+// HEX EDGE UTILITIES
+// =============================================
+// An "edge" is defined by two neighboring hex centers. We identify edges
+// by the midpoint between the two hex world positions.
+function getHexEdgeEndpoints(q1, r1, q2, r2) {
+    // Get the two corners shared between hex (q1,r1) and hex (q2,r2)
+    const w1 = hexToWorld(q1, r1);
+    const w2 = hexToWorld(q2, r2);
+    const mid = { x: (w1.x + w2.x) / 2, z: (w1.z + w2.z) / 2 };
+    // Direction perpendicular to the line between centers
+    const dx = w2.x - w1.x;
+    const dz = w2.z - w1.z;
+    const len = Math.sqrt(dx * dx + dz * dz);
+    // Perpendicular, scaled to hex radius
+    const px = -dz / len * HEX_R;
+    const pz = dx / len * HEX_R;
+    return {
+        a: { x: mid.x + px, z: mid.z + pz },
+        b: { x: mid.x - px, z: mid.z - pz },
+        mid
+    };
+}
+
+function edgeMidpoint(q1, r1, q2, r2) {
+    const w1 = hexToWorld(q1, r1);
+    const w2 = hexToWorld(q2, r2);
+    return { x: (w1.x + w2.x) / 2, z: (w1.z + w2.z) / 2 };
+}
+
+// =============================================
+// LIGHT TRAILS
+// =============================================
+const trailsGroup = new THREE.Group();
+scene.add(trailsGroup);
+
+function createTrailWall(q1, r1, q2, r2, color, heightScale = 1.0, opacityScale = 1.0) {
+    const ep = getHexEdgeEndpoints(q1, r1, q2, r2);
+    const dx = ep.b.x - ep.a.x;
+    const dz = ep.b.z - ep.a.z;
+    const length = Math.sqrt(dx * dx + dz * dz);
+    const angle = Math.atan2(dz, dx);
+    const height = 0.8 * heightScale;
+
+    const geo = new THREE.BoxGeometry(length, height, 0.05);
+    const mat = new THREE.MeshBasicMaterial({
+        color,
+        transparent: opacityScale < 1.0,
+        opacity: opacityScale,
+        side: THREE.DoubleSide
+    });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.position.set(ep.mid.x, height / 2, ep.mid.z);
+    mesh.rotation.y = -angle;
+    trailsGroup.add(mesh);
+
+    // Floor glow reflection
+    const glowGeo = new THREE.PlaneGeometry(length * 1.3, 0.6);
+    const glowMat = new THREE.MeshBasicMaterial({
+        color,
+        transparent: true,
+        opacity: 0.12 * opacityScale,
+        side: THREE.DoubleSide
+    });
+    const glow = new THREE.Mesh(glowGeo, glowMat);
+    glow.position.set(ep.mid.x, 0.01, ep.mid.z);
+    glow.rotation.x = -Math.PI / 2;
+    glow.rotation.z = -angle;
+    trailsGroup.add(glow);
+
+    return mesh;
+}
+
+// =============================================
+// PATH GENERATION (walks along hex edges)
+// =============================================
+// A path is a sequence of hex coords; the cycle rides edges between consecutive hexes.
+function generatePath(startQ, startR, startDir, length, avoid = []) {
+    const path = [{ q: startQ, r: startR }];
+    let dir = startDir;
+    const visited = new Set();
+    visited.add(`${startQ},${startR}`);
+    avoid.forEach(s => visited.add(s));
+
+    for (let i = 0; i < length; i++) {
+        const cur = path[path.length - 1];
+        // Try current direction, then slight turns
+        const tryDirs = [dir, (dir + 1) % 6, (dir + 5) % 6, (dir + 2) % 6, (dir + 4) % 6];
+        let moved = false;
+        for (const d of tryDirs) {
+            const nq = cur.q + HEX_DIRS[d][0];
+            const nr = cur.r + HEX_DIRS[d][1];
+            const key = `${nq},${nr}`;
+            if (hexDist(nq, nr, 0, 0) <= GRID_RADIUS - 2 && !visited.has(key)) {
+                path.push({ q: nq, r: nr });
+                visited.add(key);
+                dir = d;
+                moved = true;
+                break;
+            }
+        }
+        if (!moved) break;
+    }
+    return { path, visited: [...visited].map(k => k), dir };
+}
+
+// =============================================
+// PLAYERS
+// =============================================
+const players = [
+    { id: 1, color: 0x00ffff, hexColor: '#00ffff', name: 'CYAN',    alive: true,  startQ: -8, startR: 0, startDir: 0, trailLen: 22 },
+    { id: 2, color: 0xff8800, hexColor: '#ff8800', name: 'ORANGE',  alive: true,  startQ: 8,  startR: 0, startDir: 3, trailLen: 20 },
+    { id: 3, color: 0xff00ff, hexColor: '#ff00ff', name: 'MAGENTA', alive: false, startQ: 0,  startR: -8, startDir: 4, trailLen: 18 },
+    { id: 4, color: 0x88ff00, hexColor: '#88ff00', name: 'LIME',    alive: false, startQ: 0,  startR: 8, startDir: 1, trailLen: 16 }
+];
+
+// Generate all paths (avoid overlaps)
+let allVisited = [];
+players.forEach(p => {
+    const result = generatePath(p.startQ, p.startR, p.startDir, p.trailLen, allVisited);
+    p.path = result.path;
+    p.currentDir = result.dir;
+    allVisited = allVisited.concat(result.visited);
+});
+
+// Build trail walls
+players.forEach(p => {
+    p.trailMeshes = [];
+    const path = p.path;
+    for (let i = 0; i < path.length - 1; i++) {
+        const isCrashEnd = !p.alive && i >= path.length - 4;
+        const fadeScale = isCrashEnd ? Math.max(0.2, 1.0 - (i - (path.length - 4)) * 0.25) : 1.0;
+        const mesh = createTrailWall(
+            path[i].q, path[i].r,
+            path[i + 1].q, path[i + 1].r,
+            p.color, 1.0, fadeScale
+        );
+        p.trailMeshes.push(mesh);
+        if (isCrashEnd) {
+            mesh.userData.flickering = true;
+            mesh.userData.flickerPhase = Math.random() * Math.PI * 2;
+        }
+    }
+});
+
+// =============================================
+// LIGHT CYCLES
+// =============================================
+const cyclesGroup = new THREE.Group();
+scene.add(cyclesGroup);
+
+function createCycle(color) {
+    const group = new THREE.Group();
+
+    // Main body
+    const bodyGeo = new THREE.BoxGeometry(0.3, 0.15, 0.6);
+    const bodyMat = new THREE.MeshBasicMaterial({ color });
+    const body = new THREE.Mesh(bodyGeo, bodyMat);
+    body.position.y = 0.2;
+    group.add(body);
+
+    // Glow halo
+    const haloGeo = new THREE.PlaneGeometry(1.2, 1.2);
+    const haloMat = new THREE.MeshBasicMaterial({
+        color,
+        transparent: true,
+        opacity: 0.15,
+        side: THREE.DoubleSide
+    });
+    const halo = new THREE.Mesh(haloGeo, haloMat);
+    halo.position.y = 0.02;
+    halo.rotation.x = -Math.PI / 2;
+    group.add(halo);
+
+    return group;
+}
+
+// Create cycle meshes for alive players
+players.forEach(p => {
+    if (p.alive) {
+        p.cycleMesh = createCycle(p.color);
+        cyclesGroup.add(p.cycleMesh);
+        // Animation state
+        p.pathIndex = p.path.length - 2; // near end of pre-built path
+        p.moveProgress = 0;
+        p.speedParticles = [];
+    }
+});
+
+// =============================================
+// CRASH EFFECTS
+// =============================================
+const crashGroup = new THREE.Group();
+scene.add(crashGroup);
+
+function createCrashExplosion(worldPos, color) {
+    const particles = [];
+    const count = 25;
+    for (let i = 0; i < count; i++) {
+        const size = 0.04 + Math.random() * 0.08;
+        const geo = new THREE.BoxGeometry(size, size, size);
+        const mat = new THREE.MeshBasicMaterial({
+            color,
+            transparent: true,
+            opacity: 0.6 + Math.random() * 0.4
+        });
+        const mesh = new THREE.Mesh(geo, mat);
+        mesh.position.set(worldPos.x, 0.3 + Math.random() * 0.5, worldPos.z);
+        const angle = Math.random() * Math.PI * 2;
+        const speed = 0.3 + Math.random() * 0.7;
+        mesh.userData.vel = {
+            x: Math.cos(angle) * speed,
+            y: 1.0 + Math.random() * 2.0,
+            z: Math.sin(angle) * speed
+        };
+        mesh.userData.life = 1.0;
+        mesh.userData.decay = 0.003 + Math.random() * 0.005;
+        crashGroup.add(mesh);
+        particles.push(mesh);
+    }
+
+    // Ground glow ring
+    const ringGeo = new THREE.RingGeometry(0.3, 1.2, 6);
+    const ringMat = new THREE.MeshBasicMaterial({
+        color,
+        transparent: true,
+        opacity: 0.3,
+        side: THREE.DoubleSide
+    });
+    const ring = new THREE.Mesh(ringGeo, ringMat);
+    ring.position.set(worldPos.x, 0.02, worldPos.z);
+    ring.rotation.x = -Math.PI / 2;
+    ring.userData.fading = true;
+    ring.userData.fadeSpeed = 0.001;
+    crashGroup.add(ring);
+
+    return { particles, ring };
+}
+
+// Crash effects for dead players
+const crashEffects = [];
+players.forEach(p => {
+    if (!p.alive && p.path.length > 1) {
+        const last = p.path[p.path.length - 1];
+        const prev = p.path[p.path.length - 2];
+        const mid = edgeMidpoint(prev.q, prev.r, last.q, last.r);
+        const effect = createCrashExplosion(mid, p.color);
+        crashEffects.push(effect);
+    }
+});
+
+// =============================================
+// SPEED PARTICLES (for active cycles)
+// =============================================
+const speedParticlesGroup = new THREE.Group();
+scene.add(speedParticlesGroup);
+
+function createSpeedParticle(pos, color, direction) {
+    const geo = new THREE.BoxGeometry(0.02, 0.02, 0.02);
+    const mat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.8 });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.position.set(
+        pos.x + (Math.random() - 0.5) * 0.5,
+        0.15 + Math.random() * 0.3,
+        pos.z + (Math.random() - 0.5) * 0.5
+    );
+    mesh.userData.vel = {
+        x: -direction.x * 2 + (Math.random() - 0.5) * 0.5,
+        y: (Math.random() - 0.5) * 0.3,
+        z: -direction.z * 2 + (Math.random() - 0.5) * 0.5
+    };
+    mesh.userData.life = 1.0;
+    mesh.userData.decay = 0.02 + Math.random() * 0.02;
+    speedParticlesGroup.add(mesh);
+    return mesh;
+}
+
+// =============================================
+// POWER-UPS
+// =============================================
+const powerUpsGroup = new THREE.Group();
+scene.add(powerUpsGroup);
+
+const powerUpDefs = [
+    { color: 0x4488ff, label: 'SPEED', q: 3, r: -5 },
+    { color: 0xffffff, label: 'JUMP',  q: -4, r: 2 },
+    { color: 0xffcc00, label: 'SHIELD', q: 5, r: 3 }
+];
+
+const powerUps = powerUpDefs.map(def => {
+    const group = new THREE.Group();
+    const { x, z } = hexToWorld(def.q, def.r);
+
+    // Cube
+    const geo = new THREE.BoxGeometry(0.3, 0.3, 0.3);
+    const mat = new THREE.MeshBasicMaterial({ color: def.color });
+    const cube = new THREE.Mesh(geo, mat);
+    cube.position.y = 0.6;
+    group.add(cube);
+
+    // Wireframe
+    const wireGeo = new THREE.BoxGeometry(0.38, 0.38, 0.38);
+    const wireMat = new THREE.MeshBasicMaterial({ color: def.color, wireframe: true, transparent: true, opacity: 0.4 });
+    const wire = new THREE.Mesh(wireGeo, wireMat);
+    wire.position.y = 0.6;
+    group.add(wire);
+
+    // Floor glow ring
+    const ringGeo = new THREE.RingGeometry(0.15, 0.45, 6);
+    const ringMat = new THREE.MeshBasicMaterial({
+        color: def.color,
+        transparent: true,
+        opacity: 0.2,
+        side: THREE.DoubleSide
+    });
+    const ring = new THREE.Mesh(ringGeo, ringMat);
+    ring.rotation.x = -Math.PI / 2;
+    ring.position.y = 0.02;
+    group.add(ring);
+
+    group.position.set(x, 0, z);
+    powerUpsGroup.add(group);
+
+    return { group, cube, wire, ring, phase: Math.random() * Math.PI * 2 };
+});
+
+// =============================================
+// GRID PULSE WAVE
+// =============================================
+let pulseTime = 0;
+const pulseSpeed = 0.5;
+const pulsePeriod = 6.0; // seconds between pulses
+
+// =============================================
+// ANIMATION: Extend trails for alive players
+// =============================================
+function getNextHex(player) {
+    const cur = player.path[player.path.length - 1];
+    const tryDirs = [
+        player.currentDir,
+        (player.currentDir + 1) % 6,
+        (player.currentDir + 5) % 6,
+        (player.currentDir + 2) % 6,
+        (player.currentDir + 4) % 6
+    ];
+
+    for (const d of tryDirs) {
+        const nq = cur.q + HEX_DIRS[d][0];
+        const nr = cur.r + HEX_DIRS[d][1];
+        if (hexDist(nq, nr, 0, 0) <= GRID_RADIUS - 2) {
+            // Check not in own trail (last 8 steps)
+            const recentPath = player.path.slice(-8);
+            let blocked = false;
+            for (const p of recentPath) {
+                if (p.q === nq && p.r === nr) { blocked = true; break; }
+            }
+            if (!blocked) {
+                player.currentDir = d;
+                return { q: nq, r: nr };
+            }
+        }
+    }
+    // Fallback: random valid neighbor
+    for (const d of [0,1,2,3,4,5]) {
+        const nq = cur.q + HEX_DIRS[d][0];
+        const nr = cur.r + HEX_DIRS[d][1];
+        if (hexDist(nq, nr, 0, 0) <= GRID_RADIUS - 2) {
+            player.currentDir = d;
+            return { q: nq, r: nr };
+        }
+    }
+    return null;
+}
+
+const MOVE_INTERVAL = 0.3; // seconds per hex edge
+let moveTimer = 0;
+
+// =============================================
+// FPS
+// =============================================
+const statsEl = document.getElementById('stats');
+let frameCount = 0, lastFpsTime = performance.now();
+
+// =============================================
+// ANIMATION LOOP
+// =============================================
+const clock = new THREE.Clock();
+
+function animate() {
+    requestAnimationFrame(animate);
+    const dt = clock.getDelta();
+    const elapsed = clock.getElapsedTime();
+
+    // FPS
+    frameCount++;
+    const now = performance.now();
+    if (now - lastFpsTime > 500) {
+        const fps = Math.round(frameCount / ((now - lastFpsTime) / 1000));
+        statsEl.textContent = fps + ' FPS';
+        frameCount = 0;
+        lastFpsTime = now;
+    }
+
+    // --- Move active cycles ---
+    moveTimer += dt;
+    if (moveTimer >= MOVE_INTERVAL) {
+        moveTimer -= MOVE_INTERVAL;
+        players.forEach(p => {
+            if (!p.alive) return;
+            const next = getNextHex(p);
+            if (next) {
+                const prev = p.path[p.path.length - 1];
+                p.path.push(next);
+                const mesh = createTrailWall(prev.q, prev.r, next.q, next.r, p.color);
+                p.trailMeshes.push(mesh);
+            }
+        });
+    }
+
+    // --- Interpolate cycle positions ---
+    const moveFrac = moveTimer / MOVE_INTERVAL;
+    players.forEach(p => {
+        if (!p.alive || !p.cycleMesh) return;
+        const pathLen = p.path.length;
+        if (pathLen < 2) return;
+        const cur = p.path[pathLen - 2];
+        const nxt = p.path[pathLen - 1];
+        const w1 = hexToWorld(cur.q, cur.r);
+        const w2 = hexToWorld(nxt.q, nxt.r);
+
+        // Find edge midpoint and direction to position cycle ON the edge
+        const mid1 = edgeMidpoint(cur.q, cur.r, nxt.q, nxt.r);
+        // Actually let's interpolate between edge midpoints for smooth motion
+        let prevMid;
+        if (pathLen >= 3) {
+            const prv = p.path[pathLen - 3];
+            prevMid = edgeMidpoint(prv.q, prv.r, cur.q, cur.r);
+        } else {
+            prevMid = { x: w1.x, z: w1.z };
+        }
+
+        const cx = prevMid.x + (mid1.x - prevMid.x) * moveFrac;
+        const cz = prevMid.z + (mid1.z - prevMid.z) * moveFrac;
+        p.cycleMesh.position.set(cx, 0, cz);
+
+        // Face direction of travel
+        const dx = mid1.x - prevMid.x;
+        const dz = mid1.z - prevMid.z;
+        if (dx !== 0 || dz !== 0) {
+            p.cycleMesh.rotation.y = Math.atan2(dx, dz);
+        }
+
+        // Speed particles
+        if (Math.random() < 0.4) {
+            const dir = { x: dx, z: dz };
+            const len = Math.sqrt(dir.x * dir.x + dir.z * dir.z) || 1;
+            dir.x /= len; dir.z /= len;
+            const sp = createSpeedParticle({ x: cx, z: cz }, p.color, dir);
+            p.speedParticles.push(sp);
+        }
+    });
+
+    // --- Update speed particles ---
+    const toRemoveSpeed = [];
+    speedParticlesGroup.children.forEach((mesh, idx) => {
+        mesh.userData.life -= mesh.userData.decay;
+        if (mesh.userData.life <= 0) {
+            toRemoveSpeed.push(mesh);
+            return;
+        }
+        mesh.position.x += mesh.userData.vel.x * dt;
+        mesh.position.y += mesh.userData.vel.y * dt;
+        mesh.position.z += mesh.userData.vel.z * dt;
+        mesh.material.opacity = mesh.userData.life * 0.8;
+    });
+    toRemoveSpeed.forEach(m => {
+        speedParticlesGroup.remove(m);
+        m.geometry.dispose();
+        m.material.dispose();
+    });
+    // Clean up references in players
+    players.forEach(p => {
+        if (p.speedParticles) {
+            p.speedParticles = p.speedParticles.filter(sp => sp.parent !== null);
+        }
+    });
+
+    // --- Crash particle animation ---
+    crashEffects.forEach(effect => {
+        effect.particles.forEach(mesh => {
+            if (!mesh.parent) return;
+            mesh.userData.life -= mesh.userData.decay;
+            if (mesh.userData.life <= 0) {
+                crashGroup.remove(mesh);
+                mesh.geometry.dispose();
+                mesh.material.dispose();
+                return;
+            }
+            mesh.position.x += mesh.userData.vel.x * dt * 0.5;
+            mesh.position.y += mesh.userData.vel.y * dt * 0.5;
+            mesh.position.z += mesh.userData.vel.z * dt * 0.5;
+            mesh.userData.vel.y -= dt * 2; // gravity
+            mesh.material.opacity = mesh.userData.life;
+            mesh.rotation.x += dt * 3;
+            mesh.rotation.z += dt * 2;
+        });
+        if (effect.ring && effect.ring.userData.fading) {
+            effect.ring.material.opacity -= effect.ring.userData.fadeSpeed;
+            if (effect.ring.material.opacity <= 0.05) {
+                // Keep a faint ring visible
+                effect.ring.material.opacity = 0.05 + Math.sin(elapsed * 2) * 0.03;
+            }
+        }
+    });
+
+    // --- Flickering trail segments near crashes ---
+    trailsGroup.children.forEach(mesh => {
+        if (mesh.userData.flickering) {
+            const flicker = Math.sin(elapsed * 8 + mesh.userData.flickerPhase) * 0.5 + 0.5;
+            mesh.material.opacity = 0.15 + flicker * 0.35;
+        }
+    });
+
+    // --- Grid pulse wave ---
+    pulseTime += dt;
+    const pulsePhase = (pulseTime % pulsePeriod) / pulsePeriod;
+    const pulseRadius = pulsePhase * (GRID_RADIUS + 3); // wave expands outward
+    const pulseWidth = 2.5;
+
+    gridGroup.children.forEach(line => {
+        const ud = line.userData;
+        if (!ud.q && ud.q !== 0) return;
+        const dist = hexDist(ud.q, ud.r, 0, 0);
+        const distToPulse = Math.abs(dist - pulseRadius);
+        if (distToPulse < pulseWidth) {
+            const intensity = 1.0 - distToPulse / pulseWidth;
+            const pulseColor = ud.isBoundary ? 0x334466 : 0x223344;
+            const baseColor = new THREE.Color(ud.baseColor);
+            const brightColor = new THREE.Color(pulseColor);
+            line.material.color.copy(baseColor).lerp(brightColor, intensity * 0.7);
+            line.material.opacity = (ud.isBoundary ? 0.7 : 0.4) + intensity * 0.3;
+        } else {
+            line.material.color.setHex(ud.baseColor);
+            line.material.opacity = ud.isBoundary ? 0.7 : 0.4;
+        }
+
+        // Arena boundary pulse
+        if (ud.isBoundary) {
+            const bPulse = Math.sin(elapsed * 1.5) * 0.15;
+            line.material.opacity = 0.6 + bPulse;
+        }
+    });
+
+    // --- Power-up animation ---
+    powerUps.forEach((pu, i) => {
+        const t = elapsed + pu.phase;
+        const bob = Math.sin(t * 2) * 0.1;
+        pu.cube.position.y = 0.6 + bob;
+        pu.wire.position.y = 0.6 + bob;
+        pu.cube.rotation.y = t * 1.5;
+        pu.wire.rotation.y = -t * 0.8;
+        pu.ring.material.opacity = 0.15 + Math.sin(t * 3) * 0.08;
+    });
+
+    // --- Controls & render ---
+    controls.update();
+    renderer.render(scene, camera);
+}
+
+// --- Resize ---
+window.addEventListener('resize', () => {
+    aspect = window.innerWidth / window.innerHeight;
+    camera.left = frustum * aspect / -2;
+    camera.right = frustum * aspect / 2;
+    camera.top = frustum / 2;
+    camera.bottom = frustum / -2;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+animate();
+</script>
+</body>
+</html>

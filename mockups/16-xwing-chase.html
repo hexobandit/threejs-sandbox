@@ -1,0 +1,811 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>16 — X-Wing Chase</title>
+    <style>
+        *{margin:0;padding:0}body{overflow:hidden;background:#000;touch-action:none}canvas{display:block}
+        #ui{position:fixed;top:0;left:0;padding:12px;font-family:'Courier New',monospace;color:#fff;pointer-events:none;z-index:10}
+        #ui h1{font-size:14px;color:#00ff88;margin-bottom:4px}
+        #ui p{font-size:11px;color:#888;line-height:1.4;max-width:280px}
+        #stats{font-size:11px;color:#ffcc00;margin-top:8px}
+        #back{position:fixed;top:12px;right:12px;font-family:'Courier New',monospace;font-size:12px;color:#00ff88;text-decoration:none;z-index:10}
+    </style>
+</head>
+<body>
+<div id="ui">
+    <h1>16 / X-WING CHASE</h1>
+    <p>Third-person space combat · Laser fire · Asteroid field · Wingman formation</p>
+    <div id="stats">-- FPS</div>
+</div>
+<a id="back" href="../index.html">← back</a>
+<div id="hud" style="position:fixed;bottom:12px;left:12px;font-family:'Courier New',monospace;font-size:11px;color:#00ff88;z-index:10;pointer-events:none">
+    SHIELDS: ████████░░ 80%<br>
+    LASERS: ARMED<br>
+    SPEED: 850 MKS
+</div>
+<div id="target" style="position:fixed;bottom:12px;right:12px;font-family:'Courier New',monospace;font-size:11px;color:#ff4444;z-index:10;pointer-events:none;text-align:right">
+    TARGET: TIE-07<br>
+    RANGE: 2.4 KM<br>
+    STATUS: ENGAGED
+</div>
+<script type="importmap">
+{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"}}
+</script>
+<script type="module">
+import * as THREE from 'three';
+
+// --- Renderer ---
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setClearColor(0x000005);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.0;
+document.body.appendChild(renderer.domElement);
+
+// --- Scene ---
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x000005);
+
+// --- Camera (Perspective — essential for flight depth) ---
+const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+camera.position.set(0, 1.5, 3);
+camera.lookAt(0, 0, -10);
+
+// --- Lights ---
+const ambient = new THREE.AmbientLight(0x334466, 0.5);
+scene.add(ambient);
+const sunLight = new THREE.DirectionalLight(0xffeedd, 1.2);
+sunLight.position.set(5, 10, 15);
+scene.add(sunLight);
+const fillLight = new THREE.DirectionalLight(0x4488ff, 0.3);
+fillLight.position.set(-5, -2, -10);
+scene.add(fillLight);
+
+// --- FPS counter ---
+const statsEl = document.getElementById('stats');
+let frameCount = 0, lastTime = performance.now();
+
+// ==============================================================
+//  UTILITY: Build a blocky X-Wing style ship
+// ==============================================================
+function buildShip(color, cockpitColor, engineGlowColor) {
+    const group = new THREE.Group();
+
+    // Fuselage
+    const fusMat = new THREE.MeshStandardMaterial({ color, roughness: 0.6, metalness: 0.4 });
+    const fuselage = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.2, 2.0), fusMat);
+    group.add(fuselage);
+
+    // Cockpit
+    const cockMat = new THREE.MeshStandardMaterial({ color: cockpitColor, roughness: 0.3, metalness: 0.5 });
+    const cockpit = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.15, 0.4), cockMat);
+    cockpit.position.set(0, 0.15, -0.5);
+    group.add(cockpit);
+
+    // Wings in X pattern (4 wings)
+    const wingMat = new THREE.MeshStandardMaterial({ color, roughness: 0.6, metalness: 0.3 });
+    const wingGeo = new THREE.BoxGeometry(1.5, 0.03, 0.8);
+    const wingAngle = 0.2; // radians spread
+
+    // Upper-left
+    const wUL = new THREE.Mesh(wingGeo, wingMat);
+    wUL.position.set(-0.15, 0.12, 0.2);
+    wUL.rotation.z = wingAngle;
+    group.add(wUL);
+
+    // Upper-right
+    const wUR = new THREE.Mesh(wingGeo, wingMat);
+    wUR.position.set(0.15, 0.12, 0.2);
+    wUR.rotation.z = -wingAngle;
+    group.add(wUR);
+
+    // Lower-left
+    const wLL = new THREE.Mesh(wingGeo, wingMat);
+    wLL.position.set(-0.15, -0.12, 0.2);
+    wLL.rotation.z = -wingAngle;
+    group.add(wLL);
+
+    // Lower-right
+    const wLR = new THREE.Mesh(wingGeo, wingMat);
+    wLR.position.set(0.15, -0.12, 0.2);
+    wLR.rotation.z = wingAngle;
+    group.add(wLR);
+
+    // Engine pods at wing tips (4)
+    const podMat = new THREE.MeshStandardMaterial({ color: 0x555566, roughness: 0.5, metalness: 0.5 });
+    const podGeo = new THREE.BoxGeometry(0.08, 0.08, 0.3);
+    const glowMat = new THREE.MeshStandardMaterial({ color: engineGlowColor, emissive: engineGlowColor, emissiveIntensity: 3 });
+    const glowGeo = new THREE.SphereGeometry(0.06, 8, 8);
+
+    // Wing tip positions (after rotation they spread in Y)
+    const tipOffsets = [
+        { x: -0.9, y: 0.12 + Math.sin(wingAngle) * 0.75, z: 0.5 },  // UL
+        { x: 0.9, y: 0.12 + Math.sin(wingAngle) * 0.75, z: 0.5 },   // UR
+        { x: -0.9, y: -0.12 - Math.sin(wingAngle) * 0.75, z: 0.5 }, // LL
+        { x: 0.9, y: -0.12 - Math.sin(wingAngle) * 0.75, z: 0.5 },  // LR
+    ];
+
+    const engineGlows = [];
+
+    tipOffsets.forEach(off => {
+        const pod = new THREE.Mesh(podGeo, podMat);
+        pod.position.set(off.x, off.y, off.z);
+        group.add(pod);
+
+        const glow = new THREE.Mesh(glowGeo, glowMat);
+        glow.position.set(off.x, off.y, off.z + 0.2);
+        group.add(glow);
+        engineGlows.push(glow);
+    });
+
+    group.userData.engineGlows = engineGlows;
+    group.userData.tipOffsets = tipOffsets;
+    return group;
+}
+
+// ==============================================================
+//  1. STARFIELD
+// ==============================================================
+const starCount = 2000;
+const starPositions = new Float32Array(starCount * 3);
+const starSizes = new Float32Array(starCount);
+for (let i = 0; i < starCount; i++) {
+    // Distribute in a large sphere
+    const theta = Math.random() * Math.PI * 2;
+    const phi = Math.acos(2 * Math.random() - 1);
+    const r = 100 + Math.random() * 400;
+    starPositions[i * 3] = r * Math.sin(phi) * Math.cos(theta);
+    starPositions[i * 3 + 1] = r * Math.sin(phi) * Math.sin(theta);
+    starPositions[i * 3 + 2] = r * Math.cos(phi);
+    starSizes[i] = Math.random() < 0.05 ? 3.0 : (0.5 + Math.random() * 1.5);
+}
+const starGeo = new THREE.BufferGeometry();
+starGeo.setAttribute('position', new THREE.BufferAttribute(starPositions, 3));
+starGeo.setAttribute('size', new THREE.BufferAttribute(starSizes, 1));
+const starMat = new THREE.PointsMaterial({
+    color: 0xffffff, size: 0.5, sizeAttenuation: true, transparent: true, opacity: 0.85
+});
+const stars = new THREE.Points(starGeo, starMat);
+scene.add(stars);
+
+// Additional bright stars
+const brightCount = 50;
+const brightPos = new Float32Array(brightCount * 3);
+for (let i = 0; i < brightCount; i++) {
+    const theta = Math.random() * Math.PI * 2;
+    const phi = Math.acos(2 * Math.random() - 1);
+    const r = 80 + Math.random() * 200;
+    brightPos[i * 3] = r * Math.sin(phi) * Math.cos(theta);
+    brightPos[i * 3 + 1] = r * Math.sin(phi) * Math.sin(theta);
+    brightPos[i * 3 + 2] = r * Math.cos(phi);
+}
+const brightGeo = new THREE.BufferGeometry();
+brightGeo.setAttribute('position', new THREE.BufferAttribute(brightPos, 3));
+const brightMat = new THREE.PointsMaterial({
+    color: 0xaaccff, size: 1.2, sizeAttenuation: true, transparent: true, opacity: 1.0
+});
+scene.add(new THREE.Points(brightGeo, brightMat));
+
+// ==============================================================
+//  2. PLAYER SHIP
+// ==============================================================
+const playerShip = buildShip(0x888899, 0x667788, 0x00ccff);
+playerShip.position.set(0, -1, -5);
+scene.add(playerShip);
+
+// ==============================================================
+//  3. ENEMY FIGHTERS
+// ==============================================================
+const enemies = [];
+const enemyData = [
+    { x: 2, y: 0.5, z: -25 },
+    { x: -3, y: -0.5, z: -30 },
+    { x: 0.5, y: 1, z: -35 },
+    { x: -1.5, y: -0.3, z: -22 },
+];
+enemyData.forEach((ed, i) => {
+    const enemy = buildShip(0x882222, 0x553333, 0xff3300);
+    enemy.position.set(ed.x, ed.y, ed.z);
+    enemy.userData.basePos = { ...ed };
+    enemy.userData.damaged = (i === 2); // Third enemy is damaged
+    enemy.userData.phaseOffset = Math.random() * Math.PI * 2;
+    scene.add(enemy);
+    enemies.push(enemy);
+});
+
+// ==============================================================
+//  4. LASER FIRE — Player (green) & Enemy (red)
+// ==============================================================
+const laserPool = { green: [], red: [] };
+
+function createLaser(color, emissiveColor) {
+    const geo = new THREE.BoxGeometry(0.02, 0.02, 1.5);
+    const mat = new THREE.MeshBasicMaterial({
+        color: emissiveColor,
+        transparent: true,
+        opacity: 0.9,
+        blending: THREE.AdditiveBlending
+    });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.visible = false;
+    scene.add(mesh);
+    return mesh;
+}
+
+// Pre-allocate laser bolts
+for (let i = 0; i < 40; i++) {
+    laserPool.green.push({ mesh: createLaser('green', 0x44ff44), active: false, vel: 0, life: 0 });
+}
+for (let i = 0; i < 30; i++) {
+    laserPool.red.push({ mesh: createLaser('red', 0xff2222), active: false, vel: 0, life: 0 });
+}
+
+let lastPlayerFireTime = 0;
+let lastEnemyFireTime = 0;
+
+function firePlayerLasers(time) {
+    const tips = playerShip.userData.tipOffsets;
+    tips.forEach(tip => {
+        const bolt = laserPool.green.find(b => !b.active);
+        if (!bolt) return;
+        // Transform tip position to world via the ship
+        const worldPos = new THREE.Vector3(tip.x, tip.y, tip.z - 0.5).applyMatrix4(playerShip.matrixWorld);
+        bolt.mesh.position.copy(worldPos);
+        bolt.mesh.rotation.copy(playerShip.rotation);
+        bolt.mesh.visible = true;
+        bolt.active = true;
+        bolt.vel = -80; // forward along -Z
+        bolt.life = 0;
+    });
+}
+
+function fireEnemyLasers(time) {
+    // Pick a random enemy to fire
+    const enemy = enemies[Math.floor(Math.random() * enemies.length)];
+    for (let i = 0; i < 2; i++) {
+        const bolt = laserPool.red.find(b => !b.active);
+        if (!bolt) return;
+        const offset = (i === 0) ? -0.3 : 0.3;
+        bolt.mesh.position.set(
+            enemy.position.x + offset,
+            enemy.position.y,
+            enemy.position.z + 1.0
+        );
+        bolt.mesh.visible = true;
+        bolt.active = true;
+        bolt.vel = 40; // toward camera (+Z)
+        bolt.life = 0;
+    }
+}
+
+// ==============================================================
+//  5. ASTEROIDS
+// ==============================================================
+const asteroids = [];
+for (let i = 0; i < 10; i++) {
+    const sx = 0.5 + Math.random() * 2;
+    const sy = 0.5 + Math.random() * 2;
+    const sz = 0.5 + Math.random() * 2;
+    const geo = new THREE.BoxGeometry(sx, sy, sz);
+    const color = new THREE.Color().setHSL(0.07 + Math.random() * 0.05, 0.2, 0.25 + Math.random() * 0.15);
+    const mat = new THREE.MeshStandardMaterial({ color, roughness: 0.9, metalness: 0.1 });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.position.set(
+        (Math.random() - 0.5) * 30,
+        (Math.random() - 0.5) * 15,
+        -20 - Math.random() * 60
+    );
+    mesh.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, Math.random() * Math.PI);
+    mesh.userData.rotSpeed = new THREE.Vector3(
+        (Math.random() - 0.5) * 0.5,
+        (Math.random() - 0.5) * 0.5,
+        (Math.random() - 0.5) * 0.5
+    );
+    mesh.userData.baseZ = mesh.position.z;
+    scene.add(mesh);
+    asteroids.push(mesh);
+}
+
+// ==============================================================
+//  6. EXPLOSION EFFECT
+// ==============================================================
+const explosionGroup = new THREE.Group();
+explosionGroup.position.set(4, 2, -45);
+scene.add(explosionGroup);
+
+// Explosion particles
+const expParticles = [];
+for (let i = 0; i < 50; i++) {
+    const size = 0.05 + Math.random() * 0.15;
+    const geo = new THREE.SphereGeometry(size, 4, 4);
+    const hue = 0.05 + Math.random() * 0.1; // orange-yellow
+    const mat = new THREE.MeshBasicMaterial({
+        color: new THREE.Color().setHSL(hue, 1.0, 0.5 + Math.random() * 0.3),
+        transparent: true,
+        opacity: 1.0,
+        blending: THREE.AdditiveBlending
+    });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.userData.vel = new THREE.Vector3(
+        (Math.random() - 0.5) * 8,
+        (Math.random() - 0.5) * 8,
+        (Math.random() - 0.5) * 8
+    );
+    explosionGroup.add(mesh);
+    expParticles.push(mesh);
+}
+
+// Wireframe fragments
+const expFragments = [];
+for (let i = 0; i < 8; i++) {
+    const geo = new THREE.BoxGeometry(
+        0.1 + Math.random() * 0.3,
+        0.05 + Math.random() * 0.15,
+        0.1 + Math.random() * 0.3
+    );
+    const mat = new THREE.MeshBasicMaterial({ color: 0x885533, wireframe: true, transparent: true, opacity: 0.8 });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.userData.vel = new THREE.Vector3(
+        (Math.random() - 0.5) * 5,
+        (Math.random() - 0.5) * 5,
+        (Math.random() - 0.5) * 5
+    );
+    mesh.userData.rotVel = new THREE.Vector3(
+        (Math.random() - 0.5) * 10,
+        (Math.random() - 0.5) * 10,
+        (Math.random() - 0.5) * 10
+    );
+    explosionGroup.add(mesh);
+    expFragments.push(mesh);
+}
+
+// Flash sphere
+const flashGeo = new THREE.SphereGeometry(1, 16, 16);
+const flashMat = new THREE.MeshBasicMaterial({
+    color: 0xffffcc, transparent: true, opacity: 1.0, blending: THREE.AdditiveBlending
+});
+const flashSphere = new THREE.Mesh(flashGeo, flashMat);
+explosionGroup.add(flashSphere);
+
+let explosionTime = 0;
+const explosionCycleDuration = 4.0; // restart every 4 seconds
+
+// ==============================================================
+//  7. HUD ELEMENTS (3D, camera-attached)
+// ==============================================================
+const hudGroup = new THREE.Group();
+scene.add(hudGroup);
+
+// Targeting reticle — circle + cross
+const reticlePoints = [];
+const reticleSegments = 48;
+for (let i = 0; i <= reticleSegments; i++) {
+    const angle = (i / reticleSegments) * Math.PI * 2;
+    reticlePoints.push(new THREE.Vector3(Math.cos(angle) * 0.15, Math.sin(angle) * 0.15, 0));
+}
+const reticleGeo = new THREE.BufferGeometry().setFromPoints(reticlePoints);
+const reticleMat = new THREE.LineBasicMaterial({ color: 0x00ff44, transparent: true, opacity: 0.6 });
+const reticleCircle = new THREE.Line(reticleGeo, reticleMat);
+
+// Cross
+const crossPoints = [
+    new THREE.Vector3(-0.2, 0, 0), new THREE.Vector3(-0.08, 0, 0),
+    new THREE.Vector3(0.08, 0, 0), new THREE.Vector3(0.2, 0, 0),
+    new THREE.Vector3(0, -0.2, 0), new THREE.Vector3(0, -0.08, 0),
+    new THREE.Vector3(0, 0.08, 0), new THREE.Vector3(0, 0.2, 0),
+];
+const crossGeo = new THREE.BufferGeometry().setFromPoints(crossPoints);
+const crossLines = new THREE.LineSegments(crossGeo, reticleMat);
+
+const reticleGroup = new THREE.Group();
+reticleGroup.add(reticleCircle);
+reticleGroup.add(crossLines);
+hudGroup.add(reticleGroup);
+
+// Shield bar — 3 small green cubes bottom-left of view
+const shieldCubes = [];
+for (let i = 0; i < 3; i++) {
+    const geo = new THREE.BoxGeometry(0.04, 0.04, 0.04);
+    const mat = new THREE.MeshBasicMaterial({ color: 0x00ff88 });
+    const cube = new THREE.Mesh(geo, mat);
+    cube.position.set(-0.55 + i * 0.06, -0.35, 0);
+    hudGroup.add(cube);
+    shieldCubes.push(cube);
+}
+
+// Speed lines (faint lines streaming past camera edges)
+const speedLineGroup = new THREE.Group();
+const speedLines = [];
+for (let i = 0; i < 30; i++) {
+    const angle = Math.random() * Math.PI * 2;
+    const dist = 0.4 + Math.random() * 0.5;
+    const x = Math.cos(angle) * dist;
+    const y = Math.sin(angle) * dist;
+    const len = 0.1 + Math.random() * 0.3;
+    const pts = [
+        new THREE.Vector3(x, y, -0.5),
+        new THREE.Vector3(x, y, -0.5 + len)
+    ];
+    const geo = new THREE.BufferGeometry().setFromPoints(pts);
+    const mat = new THREE.LineBasicMaterial({ color: 0x4488ff, transparent: true, opacity: 0.15 + Math.random() * 0.15 });
+    const line = new THREE.Line(geo, mat);
+    line.userData.phase = Math.random() * Math.PI * 2;
+    speedLineGroup.add(line);
+    speedLines.push(line);
+}
+hudGroup.add(speedLineGroup);
+
+// ==============================================================
+//  8. NEBULA / SPACE DUST
+// ==============================================================
+const nebulaParticleCount = 300;
+const nebulaPos = new Float32Array(nebulaParticleCount * 3);
+for (let i = 0; i < nebulaParticleCount; i++) {
+    nebulaPos[i * 3] = (Math.random() - 0.5) * 80;
+    nebulaPos[i * 3 + 1] = (Math.random() - 0.5) * 40;
+    nebulaPos[i * 3 + 2] = -30 - Math.random() * 80;
+}
+const nebulaGeo = new THREE.BufferGeometry();
+nebulaGeo.setAttribute('position', new THREE.BufferAttribute(nebulaPos, 3));
+const nebulaMat = new THREE.PointsMaterial({
+    color: 0x6633aa, size: 1.5, sizeAttenuation: true,
+    transparent: true, opacity: 0.12, blending: THREE.AdditiveBlending
+});
+const nebula = new THREE.Points(nebulaGeo, nebulaMat);
+scene.add(nebula);
+
+// Second layer — bluer
+const nebula2Pos = new Float32Array(nebulaParticleCount * 3);
+for (let i = 0; i < nebulaParticleCount; i++) {
+    nebula2Pos[i * 3] = (Math.random() - 0.5) * 60;
+    nebula2Pos[i * 3 + 1] = (Math.random() - 0.5) * 30;
+    nebula2Pos[i * 3 + 2] = -20 - Math.random() * 60;
+}
+const nebula2Geo = new THREE.BufferGeometry();
+nebula2Geo.setAttribute('position', new THREE.BufferAttribute(nebula2Pos, 3));
+const nebula2Mat = new THREE.PointsMaterial({
+    color: 0x2244bb, size: 2.0, sizeAttenuation: true,
+    transparent: true, opacity: 0.08, blending: THREE.AdditiveBlending
+});
+scene.add(new THREE.Points(nebula2Geo, nebula2Mat));
+
+// ==============================================================
+//  9. WINGMAN SHIP
+// ==============================================================
+const wingman = buildShip(0x6688aa, 0x556677, 0x00ccff);
+wingman.position.set(3, 0.5, -3);
+scene.add(wingman);
+
+// ==============================================================
+//  ENGINE EXHAUST PARTICLES
+// ==============================================================
+const exhaustParticles = [];
+
+function createExhaustSystem(ship, color, count) {
+    const particles = [];
+    const tips = ship.userData.tipOffsets;
+    tips.forEach(tip => {
+        for (let i = 0; i < count; i++) {
+            const geo = new THREE.SphereGeometry(0.02 + Math.random() * 0.02, 4, 4);
+            const mat = new THREE.MeshBasicMaterial({
+                color: color,
+                transparent: true,
+                opacity: 0.7,
+                blending: THREE.AdditiveBlending
+            });
+            const mesh = new THREE.Mesh(geo, mat);
+            mesh.visible = false;
+            scene.add(mesh);
+            particles.push({
+                mesh, ship, tip,
+                offset: Math.random(),
+                maxLife: 0.4 + Math.random() * 0.3,
+                life: Math.random() * 0.5
+            });
+        }
+    });
+    return particles;
+}
+
+const playerExhaust = createExhaustSystem(playerShip, 0x00ccff, 4);
+exhaustParticles.push(...playerExhaust);
+
+const wingmanExhaust = createExhaustSystem(wingman, 0x00ccff, 3);
+exhaustParticles.push(...wingmanExhaust);
+
+enemies.forEach(enemy => {
+    const ex = createExhaustSystem(enemy, 0xff4400, 3);
+    exhaustParticles.push(...ex);
+});
+
+// ==============================================================
+//  SMOKE TRAIL for damaged enemy
+// ==============================================================
+const smokeParticles = [];
+const damagedEnemy = enemies.find(e => e.userData.damaged);
+if (damagedEnemy) {
+    for (let i = 0; i < 20; i++) {
+        const geo = new THREE.SphereGeometry(0.05 + Math.random() * 0.08, 4, 4);
+        const mat = new THREE.MeshBasicMaterial({
+            color: 0x333333, transparent: true, opacity: 0.5
+        });
+        const mesh = new THREE.Mesh(geo, mat);
+        mesh.visible = false;
+        scene.add(mesh);
+        smokeParticles.push({
+            mesh,
+            life: Math.random() * 1.5,
+            maxLife: 1.0 + Math.random() * 0.5
+        });
+    }
+}
+
+// ==============================================================
+//  WINGMAN LASER FIRE
+// ==============================================================
+let lastWingmanFireTime = 0;
+
+function fireWingmanLasers(time) {
+    const tips = wingman.userData.tipOffsets;
+    // Fire from two tips
+    for (let t = 0; t < 2; t++) {
+        const tip = tips[t];
+        const bolt = laserPool.green.find(b => !b.active);
+        if (!bolt) return;
+        const worldPos = new THREE.Vector3(tip.x, tip.y, tip.z - 0.5).applyMatrix4(wingman.matrixWorld);
+        bolt.mesh.position.copy(worldPos);
+        bolt.mesh.rotation.copy(wingman.rotation);
+        bolt.mesh.visible = true;
+        bolt.active = true;
+        bolt.vel = -80;
+        bolt.life = 0;
+    }
+}
+
+// ==============================================================
+//  ANIMATION LOOP
+// ==============================================================
+const clock = new THREE.Clock();
+
+function animate() {
+    requestAnimationFrame(animate);
+
+    const dt = Math.min(clock.getDelta(), 0.05);
+    const time = clock.getElapsedTime();
+
+    // --- FPS ---
+    frameCount++;
+    const now = performance.now();
+    if (now - lastTime >= 500) {
+        statsEl.textContent = Math.round(frameCount / ((now - lastTime) / 1000)) + ' FPS';
+        frameCount = 0;
+        lastTime = now;
+    }
+
+    // --- Starfield drift (sense of forward motion) ---
+    const starArr = starGeo.attributes.position.array;
+    for (let i = 0; i < starCount; i++) {
+        starArr[i * 3 + 2] += dt * 15; // drift toward camera
+        if (starArr[i * 3 + 2] > 200) {
+            starArr[i * 3 + 2] -= 500; // wrap around far away
+        }
+    }
+    starGeo.attributes.position.needsUpdate = true;
+
+    // --- Player ship banking animation ---
+    const bankAngle = Math.sin(time * 0.7) * 0.12;
+    const pitchAngle = Math.sin(time * 0.5) * 0.03;
+    const bobY = Math.sin(time * 1.1) * 0.05;
+    playerShip.rotation.z = bankAngle;
+    playerShip.rotation.x = pitchAngle;
+    playerShip.position.y = -1 + bobY;
+
+    // Slight lateral sway
+    playerShip.position.x = Math.sin(time * 0.3) * 0.3;
+
+    // --- Camera with slight shake ---
+    const shakeX = (Math.random() - 0.5) * 0.008;
+    const shakeY = (Math.random() - 0.5) * 0.008;
+    camera.position.set(0 + shakeX, 1.5 + shakeY, 3);
+    camera.lookAt(playerShip.position.x * 0.3, 0, -10);
+
+    // --- HUD follows camera ---
+    hudGroup.position.copy(camera.position);
+    hudGroup.quaternion.copy(camera.quaternion);
+    // Move HUD slightly in front
+    const hudForward = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
+    hudGroup.position.addScaledVector(hudForward, 1.0);
+
+    // Reticle subtle pulse
+    const reticleScale = 1.0 + Math.sin(time * 3) * 0.05;
+    reticleGroup.scale.set(reticleScale, reticleScale, 1);
+
+    // Speed lines animation
+    speedLines.forEach(line => {
+        const phase = line.userData.phase;
+        line.material.opacity = 0.1 + Math.abs(Math.sin(time * 2 + phase)) * 0.2;
+    });
+
+    // --- Wingman formation ---
+    wingman.position.set(
+        3 + Math.sin(time * 0.3) * 0.3,
+        0.5 + Math.sin(time * 1.1) * 0.05 + bobY * 0.5,
+        -3 + Math.sin(time * 0.4) * 0.2
+    );
+    wingman.rotation.z = bankAngle * 0.8;
+    wingman.rotation.x = pitchAngle * 0.7;
+
+    // --- Enemy movement (evasive weaving) ---
+    enemies.forEach((enemy, i) => {
+        const phase = enemy.userData.phaseOffset;
+        const base = enemy.userData.basePos;
+        enemy.position.x = base.x + Math.sin(time * 1.2 + phase) * 2;
+        enemy.position.y = base.y + Math.sin(time * 0.8 + phase) * 0.5;
+        enemy.rotation.z = Math.sin(time * 1.2 + phase) * 0.25;
+        enemy.rotation.x = Math.sin(time * 0.9 + phase) * 0.1;
+    });
+
+    // --- Player laser fire (every ~0.3s) ---
+    if (time - lastPlayerFireTime > 0.3) {
+        firePlayerLasers(time);
+        lastPlayerFireTime = time;
+    }
+
+    // --- Enemy laser fire (every ~0.6s) ---
+    if (time - lastEnemyFireTime > 0.6) {
+        fireEnemyLasers(time);
+        lastEnemyFireTime = time;
+    }
+
+    // --- Wingman fire (every ~0.8s) ---
+    if (time - lastWingmanFireTime > 0.8) {
+        fireWingmanLasers(time);
+        lastWingmanFireTime = time;
+    }
+
+    // --- Update laser bolts ---
+    laserPool.green.forEach(bolt => {
+        if (!bolt.active) return;
+        bolt.mesh.position.z += bolt.vel * dt;
+        bolt.life += dt;
+        if (bolt.life > 1.0 || bolt.mesh.position.z < -60) {
+            bolt.active = false;
+            bolt.mesh.visible = false;
+        }
+    });
+
+    laserPool.red.forEach(bolt => {
+        if (!bolt.active) return;
+        bolt.mesh.position.z += bolt.vel * dt;
+        bolt.life += dt;
+        // Add slight wobble for enemy fire
+        bolt.mesh.position.x += (Math.random() - 0.5) * 0.02;
+        if (bolt.life > 2.0 || bolt.mesh.position.z > 10) {
+            bolt.active = false;
+            bolt.mesh.visible = false;
+        }
+    });
+
+    // --- Asteroids tumble and drift ---
+    asteroids.forEach(a => {
+        a.rotation.x += a.userData.rotSpeed.x * dt;
+        a.rotation.y += a.userData.rotSpeed.y * dt;
+        a.rotation.z += a.userData.rotSpeed.z * dt;
+        a.position.z += dt * 8; // drift toward camera
+        if (a.position.z > 15) {
+            a.position.z = -70 - Math.random() * 20;
+            a.position.x = (Math.random() - 0.5) * 30;
+            a.position.y = (Math.random() - 0.5) * 15;
+        }
+    });
+
+    // --- Engine exhaust ---
+    exhaustParticles.forEach(p => {
+        p.life += dt;
+        if (p.life > p.maxLife) {
+            p.life = 0;
+        }
+        const t = p.life / p.maxLife;
+        const worldTip = new THREE.Vector3(p.tip.x, p.tip.y, p.tip.z + 0.2)
+            .applyMatrix4(p.ship.matrixWorld);
+        // Trail behind
+        p.mesh.position.set(
+            worldTip.x + (Math.random() - 0.5) * 0.02,
+            worldTip.y + (Math.random() - 0.5) * 0.02,
+            worldTip.z + t * 1.5
+        );
+        p.mesh.material.opacity = (1 - t) * 0.7;
+        p.mesh.scale.setScalar(1 - t * 0.5);
+        p.mesh.visible = true;
+    });
+
+    // --- Smoke trail on damaged enemy ---
+    if (damagedEnemy) {
+        smokeParticles.forEach(p => {
+            p.life += dt;
+            if (p.life > p.maxLife) {
+                p.life = 0;
+            }
+            const t = p.life / p.maxLife;
+            p.mesh.position.set(
+                damagedEnemy.position.x + (Math.random() - 0.5) * 0.2,
+                damagedEnemy.position.y + (Math.random() - 0.5) * 0.2,
+                damagedEnemy.position.z + 1.0 + t * 4
+            );
+            p.mesh.material.opacity = (1 - t) * 0.4;
+            p.mesh.scale.setScalar(1 + t * 2);
+            p.mesh.visible = true;
+        });
+    }
+
+    // --- Explosion cycling ---
+    explosionTime += dt;
+    const expCycle = explosionTime % explosionCycleDuration;
+    const expT = expCycle / explosionCycleDuration;
+
+    if (expT < 0.01) {
+        // Reset explosion
+        expParticles.forEach(p => {
+            p.position.set(0, 0, 0);
+            p.material.opacity = 1.0;
+        });
+        expFragments.forEach(f => {
+            f.position.set(0, 0, 0);
+            f.material.opacity = 0.8;
+        });
+    }
+
+    expParticles.forEach(p => {
+        p.position.addScaledVector(p.userData.vel, dt);
+        p.material.opacity = Math.max(0, 1.0 - expT * 1.5);
+        p.scale.setScalar(Math.max(0.01, 1.0 - expT));
+    });
+
+    expFragments.forEach(f => {
+        f.position.addScaledVector(f.userData.vel, dt);
+        f.rotation.x += f.userData.rotVel.x * dt;
+        f.rotation.y += f.userData.rotVel.y * dt;
+        f.material.opacity = Math.max(0, 0.8 - expT);
+    });
+
+    // Flash
+    flashSphere.scale.setScalar(0.1 + expT * 3);
+    flashMat.opacity = Math.max(0, 1.0 - expT * 4);
+
+    // Point light at explosion
+    explosionGroup.children.forEach(c => {
+        // Just animate visibility based on cycle
+    });
+
+    // --- Nebula gentle sway ---
+    nebula.position.x = Math.sin(time * 0.1) * 5;
+    nebula.position.z += dt * 3;
+    if (nebula.position.z > 20) nebula.position.z = -80;
+
+    // --- Update engine glow intensity pulsing ---
+    const glowIntensity = 2.5 + Math.sin(time * 10) * 0.5;
+    playerShip.userData.engineGlows.forEach(g => {
+        g.material.emissiveIntensity = glowIntensity;
+    });
+    wingman.userData.engineGlows.forEach(g => {
+        g.material.emissiveIntensity = glowIntensity;
+    });
+
+    // --- Render ---
+    renderer.render(scene, camera);
+}
+
+// --- Resize ---
+window.addEventListener('resize', () => {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+animate();
+</script>
+</body>
+</html>

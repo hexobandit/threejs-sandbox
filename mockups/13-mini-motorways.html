@@ -1,0 +1,751 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0,user-scalable=no">
+<title>13 / Mini Motorways</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{overflow:hidden;background:#f5f0e8;touch-action:none;-webkit-touch-callout:none;-webkit-user-select:none;user-select:none}
+canvas{display:block}
+#ui{position:fixed;top:0;left:0;padding:14px 16px;font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;color:#555;pointer-events:none;z-index:10}
+#ui h1{font-size:14px;font-weight:600;color:#333;margin-bottom:2px;letter-spacing:0.5px}
+#ui p{font-size:11px;color:#999;line-height:1.4}
+#stats{font-size:10px;color:#aaa;margin-top:6px}
+#back{position:fixed;top:14px;right:16px;font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;font-size:12px;color:#888;text-decoration:none;z-index:10;letter-spacing:0.3px;transition:color 0.2s}
+#back:hover{color:#555}
+</style>
+</head>
+<body>
+
+<div id="ui">
+  <h1>13 / MINI MOTORWAYS</h1>
+  <p>Hex grid traffic flow</p>
+  <div id="stats">FPS: --</div>
+</div>
+
+<a id="back" href="../index.html">&larr; back</a>
+
+<canvas id="main"></canvas>
+
+<script>
+// ── CANVAS SETUP ──────────────────────────────────────────────────
+const canvas = document.getElementById('main');
+const ctx = canvas.getContext('2d');
+const dpr = Math.min(window.devicePixelRatio, 2);
+let W, H;
+
+function resize() {
+    W = window.innerWidth;
+    H = window.innerHeight;
+    canvas.width = W * dpr;
+    canvas.height = H * dpr;
+    canvas.style.width = W + 'px';
+    canvas.style.height = H + 'px';
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+resize();
+window.addEventListener('resize', resize);
+
+// ── COLORS ────────────────────────────────────────────────────────
+const BG = '#f5f0e8';
+const GRID_COLOR = '#e0dbd0';
+const TEXT_COLOR = '#555555';
+const TEXT_DARK = '#333333';
+
+const COLORS = {
+    red:    { main: '#e74c3c', road: '#d9685f', light: '#f5b7b1' },
+    blue:   { main: '#3498db', road: '#5fa8d9', light: '#aed6f1' },
+    green:  { main: '#27ae60', road: '#52be80', light: '#a9dfbf' },
+    yellow: { main: '#f1c40f', road: '#f0d24f', light: '#f9e79f' },
+    purple: { main: '#9b59b6', road: '#af7ac5', light: '#d7bde2' }
+};
+
+// ── HEX GRID ──────────────────────────────────────────────────────
+const S = 37; // hex size parameter
+
+function hexToPixel(q, r) {
+    return {
+        x: S * 1.5 * q,
+        y: S * Math.sqrt(3) * (r + q / 2)
+    };
+}
+
+// Hex corner for flat-top hex
+function hexCorner(cx, cy, size, i) {
+    const angle = Math.PI / 180 * (60 * i);
+    return {
+        x: cx + size * Math.cos(angle),
+        y: cy + size * Math.sin(angle)
+    };
+}
+
+// Camera offset to center the scene
+let camX = 0, camY = 0;
+
+function initCamera() {
+    camX = W / 2;
+    camY = H / 2;
+}
+
+function worldToScreen(wx, wy) {
+    return { x: wx + camX, y: wy + camY };
+}
+
+// ── HEX NEIGHBORS (flat-top) ─────────────────────────────────────
+const HEX_DIRS = [
+    { q: 1, r: 0 },  { q: 1, r: -1 }, { q: 0, r: -1 },
+    { q: -1, r: 0 }, { q: -1, r: 1 }, { q: 0, r: 1 }
+];
+
+// ── SCENE DATA ────────────────────────────────────────────────────
+
+// Houses (sources) - small colored squares
+const houses = [
+    { q: -5, r: 1, color: 'red' },
+    { q: -3, r: -2, color: 'red' },
+    { q: 2, r: -4, color: 'red' },
+    { q: -6, r: 4, color: 'blue' },
+    { q: 1, r: 3, color: 'blue' },
+    { q: -2, r: -3, color: 'green' },
+    { q: 4, r: 1, color: 'green' },
+    { q: -4, r: 3, color: 'yellow' },
+    { q: 3, r: -2, color: 'yellow' },
+    { q: -1, r: -5, color: 'purple' }
+];
+
+// Destinations (larger squares)
+const destinations = [
+    { q: 3, r: 3, color: 'red', demand: 3, satisfied: 12 },
+    { q: -1, r: 5, color: 'red', demand: 1, satisfied: 8 },
+    { q: -4, r: -1, color: 'blue', demand: 2, satisfied: 6 },
+    { q: 5, r: -3, color: 'green', demand: 0, satisfied: 10 },
+    { q: -2, r: 6, color: 'yellow', demand: 4, satisfied: 4 },
+    { q: 6, r: -1, color: 'purple', demand: 1, satisfied: 7 }
+];
+
+// Road networks - each is a list of hex coordinate waypoints
+const roads = [
+    // Red network 1: house(-5,1) -> house(-3,-2) -> dest(3,3)
+    { color: 'red', path: [
+        {q:-5,r:1},{q:-4,r:1},{q:-3,r:0},{q:-3,r:-1},{q:-3,r:-2}
+    ]},
+    { color: 'red', path: [
+        {q:-3,r:-2},{q:-2,r:-2},{q:-1,r:-1},{q:0,r:0},{q:1,r:0},{q:2,r:1},{q:3,r:1},{q:3,r:2},{q:3,r:3}
+    ]},
+    // Red network 2: house(2,-4) -> dest(3,3) via different route
+    { color: 'red', path: [
+        {q:2,r:-4},{q:2,r:-3},{q:2,r:-2},{q:2,r:-1},{q:2,r:0},{q:2,r:1},{q:3,r:1},{q:3,r:2},{q:3,r:3}
+    ]},
+    // Red to second dest
+    { color: 'red', path: [
+        {q:-5,r:1},{q:-4,r:2},{q:-3,r:2},{q:-2,r:3},{q:-1,r:3},{q:-1,r:4},{q:-1,r:5}
+    ]},
+    // Blue network
+    { color: 'blue', path: [
+        {q:-6,r:4},{q:-5,r:3},{q:-5,r:2},{q:-5,r:1},{q:-5,r:0},{q:-4,r:-1}
+    ]},
+    { color: 'blue', path: [
+        {q:1,r:3},{q:0,r:3},{q:-1,r:2},{q:-2,r:1},{q:-3,r:0},{q:-4,r:0},{q:-4,r:-1}
+    ]},
+    // Green network
+    { color: 'green', path: [
+        {q:-2,r:-3},{q:-1,r:-3},{q:0,r:-3},{q:1,r:-3},{q:2,r:-3},{q:3,r:-3},{q:4,r:-3},{q:5,r:-3}
+    ]},
+    { color: 'green', path: [
+        {q:4,r:1},{q:4,r:0},{q:4,r:-1},{q:4,r:-2},{q:5,r:-3}
+    ]},
+    // Yellow network
+    { color: 'yellow', path: [
+        {q:-4,r:3},{q:-3,r:3},{q:-3,r:4},{q:-2,r:4},{q:-2,r:5},{q:-2,r:6}
+    ]},
+    { color: 'yellow', path: [
+        {q:3,r:-2},{q:2,r:-1},{q:1,r:0},{q:0,r:1},{q:-1,r:2},{q:-1,r:3},{q:-1,r:4},{q:-2,r:5},{q:-2,r:6}
+    ]},
+    // Purple network
+    { color: 'purple', path: [
+        {q:-1,r:-5},{q:0,r:-5},{q:1,r:-4},{q:2,r:-4},{q:3,r:-3},{q:4,r:-3},{q:5,r:-3},{q:5,r:-2},{q:6,r:-2},{q:6,r:-1}
+    ]}
+];
+
+// Precompute pixel paths for roads
+function computeRoadPixels(road) {
+    return road.path.map(h => hexToPixel(h.q, h.r));
+}
+
+// Find shared edges (congestion points)
+function findCongestionPoints() {
+    const edgeMap = {};
+    const congestion = [];
+    for (const road of roads) {
+        for (let i = 0; i < road.path.length - 1; i++) {
+            const a = road.path[i], b = road.path[i + 1];
+            const key = [
+                Math.min(a.q * 100 + a.r, b.q * 100 + b.r),
+                Math.max(a.q * 100 + a.r, b.q * 100 + b.r)
+            ].join(',');
+            if (!edgeMap[key]) edgeMap[key] = [];
+            edgeMap[key].push(road.color);
+        }
+    }
+    for (const [key, colors] of Object.entries(edgeMap)) {
+        const uniqueColors = [...new Set(colors)];
+        if (uniqueColors.length > 1) {
+            const parts = key.split(',');
+            const a = { q: Math.floor(Number(parts[0]) / 100), r: Number(parts[0]) % 100 };
+            const b = { q: Math.floor(Number(parts[1]) / 100), r: Number(parts[1]) % 100 };
+            // Handle negative remainders
+            const p1 = hexToPixel(a.q, a.r);
+            const p2 = hexToPixel(b.q, b.r);
+            congestion.push({ x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 });
+        }
+    }
+    return congestion;
+}
+
+// Manually place a few congestion dots at shared road segments
+const congestionPoints = [
+    hexToPixel(3, 1),   // red roads merge
+    hexToPixel(3, 2),   // red roads merge
+    hexToPixel(-3, 0),  // near blue/red overlap area
+    hexToPixel(5, -3),  // green/purple near overlap
+    hexToPixel(-1, 3),  // yellow near red
+    hexToPixel(-2, 5),  // yellow merge
+];
+
+// Landscape elements
+const trees = [
+    { q: -6, r: -1 }, { q: -6, r: 0 }, // tree cluster 1
+    { q: 5, r: 2 }, { q: 6, r: 1 },    // tree cluster 2
+    { q: 0, r: -6 },                     // tree cluster 3
+    { q: -3, r: 6 },                     // tree cluster 4
+];
+
+const waterHexes = [
+    { q: 6, r: 3 }, { q: 7, r: 2 }, { q: 7, r: 3 }
+];
+
+const parkHexes = [
+    { q: -7, r: 2 }, { q: -7, r: 3 }, { q: -6, r: 2 }
+];
+
+// ── CARS ──────────────────────────────────────────────────────────
+class Car {
+    constructor(roadIndex) {
+        this.roadIndex = roadIndex;
+        const road = roads[roadIndex];
+        this.color = road.color;
+        this.pixels = computeRoadPixels(road);
+        this.progress = Math.random(); // 0 to 1 along the path
+        this.speed = 0.0003 + Math.random() * 0.0004; // units per ms
+        this.alive = true;
+        this.alpha = 0;
+        this.fadeIn = true;
+        this.fadeOut = false;
+        this.trail = [];
+    }
+
+    update(dt) {
+        if (this.fadeIn) {
+            this.alpha += dt * 0.003;
+            if (this.alpha >= 1) { this.alpha = 1; this.fadeIn = false; }
+        }
+        if (this.fadeOut) {
+            this.alpha -= dt * 0.004;
+            if (this.alpha <= 0) { this.alive = false; return; }
+        }
+
+        this.progress += this.speed * dt;
+
+        // Store trail positions
+        const pos = this.getPosition();
+        if (pos) {
+            this.trail.unshift({ x: pos.x, y: pos.y });
+            if (this.trail.length > 4) this.trail.pop();
+        }
+
+        if (this.progress >= 1) {
+            this.fadeOut = true;
+            this.progress = 1;
+        }
+    }
+
+    getPosition() {
+        const pts = this.pixels;
+        if (pts.length < 2) return pts[0] || { x: 0, y: 0 };
+        const totalSegs = pts.length - 1;
+        const seg = Math.min(Math.floor(this.progress * totalSegs), totalSegs - 1);
+        const t = (this.progress * totalSegs) - seg;
+        return {
+            x: pts[seg].x + (pts[seg + 1].x - pts[seg].x) * t,
+            y: pts[seg].y + (pts[seg + 1].y - pts[seg].y) * t
+        };
+    }
+}
+
+let cars = [];
+
+function initCars() {
+    cars = [];
+    for (let i = 0; i < 15; i++) {
+        const ri = Math.floor(Math.random() * roads.length);
+        const car = new Car(ri);
+        car.progress = Math.random() * 0.8;
+        car.alpha = 1;
+        car.fadeIn = false;
+        cars.push(car);
+    }
+}
+
+function spawnCar() {
+    if (cars.length < 18) {
+        const ri = Math.floor(Math.random() * roads.length);
+        cars.push(new Car(ri));
+    }
+}
+
+// ── GAME STATE ────────────────────────────────────────────────────
+let score = 847;
+let week = 12;
+let scoreTimer = 0;
+let weekTimer = 0;
+let gameTime = 0;
+
+// Available items display
+const availableItems = {
+    roads: 14,
+    roundabouts: 2,
+    motorways: 1,
+    trafficLights: 3
+};
+
+// ── DRAWING FUNCTIONS ─────────────────────────────────────────────
+
+function drawHexGrid() {
+    const hexR = 35;
+    // Determine visible hex range
+    const margin = 2;
+    const qMin = -9, qMax = 9, rMin = -8, rMax = 8;
+
+    ctx.strokeStyle = GRID_COLOR;
+    ctx.lineWidth = 0.5;
+
+    for (let q = qMin; q <= qMax; q++) {
+        for (let r = rMin; r <= rMax; r++) {
+            const center = hexToPixel(q, r);
+            const sc = worldToScreen(center.x, center.y);
+
+            // Skip hexes far off screen
+            if (sc.x < -60 || sc.x > W + 60 || sc.y < -60 || sc.y > H + 60) continue;
+
+            ctx.beginPath();
+            for (let i = 0; i < 6; i++) {
+                const corner = hexCorner(sc.x, sc.y, hexR, i);
+                if (i === 0) ctx.moveTo(corner.x, corner.y);
+                else ctx.lineTo(corner.x, corner.y);
+            }
+            ctx.closePath();
+            ctx.stroke();
+        }
+    }
+}
+
+function drawWater() {
+    const hexR = 35;
+    ctx.fillStyle = 'rgba(174, 214, 241, 0.35)';
+    for (const wh of waterHexes) {
+        const center = hexToPixel(wh.q, wh.r);
+        const sc = worldToScreen(center.x, center.y);
+        ctx.beginPath();
+        for (let i = 0; i < 6; i++) {
+            const corner = hexCorner(sc.x, sc.y, hexR, i);
+            if (i === 0) ctx.moveTo(corner.x, corner.y);
+            else ctx.lineTo(corner.x, corner.y);
+        }
+        ctx.closePath();
+        ctx.fill();
+    }
+}
+
+function drawPark() {
+    const hexR = 35;
+    ctx.fillStyle = 'rgba(169, 223, 191, 0.25)';
+    for (const ph of parkHexes) {
+        const center = hexToPixel(ph.q, ph.r);
+        const sc = worldToScreen(center.x, center.y);
+        ctx.beginPath();
+        for (let i = 0; i < 6; i++) {
+            const corner = hexCorner(sc.x, sc.y, hexR, i);
+            if (i === 0) ctx.moveTo(corner.x, corner.y);
+            else ctx.lineTo(corner.x, corner.y);
+        }
+        ctx.closePath();
+        ctx.fill();
+    }
+}
+
+function drawTrees(t) {
+    for (const tree of trees) {
+        const center = hexToPixel(tree.q, tree.r);
+        const sc = worldToScreen(center.x, center.y);
+        const sway = Math.sin(t * 0.001 + tree.q * 2) * 1;
+
+        // 3 dots in a triangle
+        const treeColor = '#7dba8e';
+        ctx.fillStyle = treeColor;
+        const offsets = [
+            { dx: 0, dy: -4 },
+            { dx: -3.5, dy: 3 },
+            { dx: 3.5, dy: 3 }
+        ];
+        for (const off of offsets) {
+            ctx.beginPath();
+            ctx.arc(sc.x + off.dx + sway, sc.y + off.dy, 3, 0, Math.PI * 2);
+            ctx.fill();
+        }
+    }
+}
+
+function drawRoads() {
+    // Group roads by color and track which edges are used per color for offset
+    const colorOrder = ['red', 'blue', 'green', 'yellow', 'purple'];
+    const edgeUsage = {}; // edge key -> array of colors
+
+    // First pass: catalog edge usage
+    for (const road of roads) {
+        for (let i = 0; i < road.path.length - 1; i++) {
+            const a = road.path[i], b = road.path[i + 1];
+            const key = [
+                Math.min(a.q * 1000 + a.r + 500, b.q * 1000 + b.r + 500),
+                Math.max(a.q * 1000 + a.r + 500, b.q * 1000 + b.r + 500)
+            ].join('|');
+            if (!edgeUsage[key]) edgeUsage[key] = new Set();
+            edgeUsage[key].add(road.color);
+        }
+    }
+
+    // Draw roads
+    for (const road of roads) {
+        const c = COLORS[road.color];
+        ctx.strokeStyle = c.road;
+        ctx.lineWidth = 4;
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+
+        const pixels = computeRoadPixels(road);
+
+        ctx.beginPath();
+        for (let i = 0; i < pixels.length; i++) {
+            const sc = worldToScreen(pixels[i].x, pixels[i].y);
+
+            // Check for offset on shared edges
+            let offX = 0, offY = 0;
+            if (i < pixels.length - 1) {
+                const a = road.path[i], b = road.path[i + 1];
+                const key = [
+                    Math.min(a.q * 1000 + a.r + 500, b.q * 1000 + b.r + 500),
+                    Math.max(a.q * 1000 + a.r + 500, b.q * 1000 + b.r + 500)
+                ].join('|');
+                const usage = edgeUsage[key];
+                if (usage && usage.size > 1) {
+                    const idx = colorOrder.indexOf(road.color);
+                    const total = usage.size;
+                    const dx = pixels[i + 1].x - pixels[i].x;
+                    const dy = pixels[i + 1].y - pixels[i].y;
+                    const len = Math.sqrt(dx * dx + dy * dy) || 1;
+                    const nx = -dy / len;
+                    const ny = dx / len;
+                    const spread = 3;
+                    const offset = (idx - (total - 1) / 2) * spread;
+                    offX = nx * offset;
+                    offY = ny * offset;
+                }
+            }
+
+            if (i === 0) ctx.moveTo(sc.x + offX, sc.y + offY);
+            else ctx.lineTo(sc.x + offX, sc.y + offY);
+        }
+        ctx.stroke();
+    }
+}
+
+function drawCongestion(t) {
+    for (const cp of congestionPoints) {
+        const sc = worldToScreen(cp.x, cp.y);
+        const pulse = 0.5 + 0.5 * Math.sin(t * 0.004);
+        ctx.fillStyle = `rgba(241, 196, 15, ${0.4 + pulse * 0.3})`;
+        ctx.beginPath();
+        ctx.arc(sc.x, sc.y, 3 + pulse, 0, Math.PI * 2);
+        ctx.fill();
+    }
+}
+
+function drawHouses() {
+    for (const house of houses) {
+        const center = hexToPixel(house.q, house.r);
+        const sc = worldToScreen(center.x, center.y);
+        const c = COLORS[house.color];
+
+        // Shadow
+        ctx.fillStyle = 'rgba(0,0,0,0.06)';
+        ctx.fillRect(sc.x - 4 + 1, sc.y - 4 + 1, 8, 8);
+
+        // House square
+        ctx.fillStyle = c.main;
+        ctx.fillRect(sc.x - 4, sc.y - 4, 8, 8);
+
+        // Tiny white inner highlight
+        ctx.fillStyle = 'rgba(255,255,255,0.3)';
+        ctx.fillRect(sc.x - 2, sc.y - 2, 3, 3);
+    }
+}
+
+function drawDestinations(t) {
+    for (const dest of destinations) {
+        const center = hexToPixel(dest.q, dest.r);
+        const sc = worldToScreen(center.x, center.y);
+        const c = COLORS[dest.color];
+
+        // Pulsing ring for high demand
+        if (dest.demand > 2) {
+            const pulse = 0.5 + 0.5 * Math.sin(t * 0.005);
+            ctx.strokeStyle = c.main;
+            ctx.lineWidth = 1.5;
+            ctx.globalAlpha = 0.3 + pulse * 0.4;
+            ctx.beginPath();
+            ctx.arc(sc.x, sc.y, 12 + pulse * 3, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.globalAlpha = 1;
+        }
+
+        // Satisfied glow
+        if (dest.demand === 0) {
+            ctx.fillStyle = `${c.light}88`;
+            ctx.beginPath();
+            ctx.arc(sc.x, sc.y, 10, 0, Math.PI * 2);
+            ctx.fill();
+        }
+
+        // Shadow
+        ctx.fillStyle = 'rgba(0,0,0,0.08)';
+        ctx.fillRect(sc.x - 6 + 1, sc.y - 6 + 1, 12, 12);
+
+        // Destination square
+        ctx.fillStyle = c.main;
+        ctx.fillRect(sc.x - 6, sc.y - 6, 12, 12);
+
+        // White inner square
+        ctx.fillStyle = 'rgba(255,255,255,0.4)';
+        ctx.fillRect(sc.x - 3, sc.y - 3, 6, 6);
+
+        // Demand indicator (small dots)
+        if (dest.demand > 0) {
+            const dotSpacing = 5;
+            const startX = sc.x - ((dest.demand - 1) * dotSpacing) / 2;
+            ctx.fillStyle = c.main;
+            for (let i = 0; i < dest.demand; i++) {
+                ctx.beginPath();
+                ctx.arc(startX + i * dotSpacing, sc.y + 12, 2, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+
+        // Checkmark for satisfied
+        if (dest.demand === 0) {
+            ctx.strokeStyle = '#27ae60';
+            ctx.lineWidth = 1.5;
+            ctx.lineCap = 'round';
+            ctx.beginPath();
+            ctx.moveTo(sc.x - 3, sc.y + 11);
+            ctx.lineTo(sc.x - 1, sc.y + 13);
+            ctx.lineTo(sc.x + 3, sc.y + 9);
+            ctx.stroke();
+        }
+    }
+}
+
+function drawCars(t) {
+    for (const car of cars) {
+        if (!car.alive) continue;
+        const pos = car.getPosition();
+        if (!pos) continue;
+        const sc = worldToScreen(pos.x, pos.y);
+        const c = COLORS[car.color];
+
+        // Trail
+        for (let i = 1; i < car.trail.length; i++) {
+            const tp = worldToScreen(car.trail[i].x, car.trail[i].y);
+            ctx.fillStyle = c.main;
+            ctx.globalAlpha = car.alpha * (0.3 - i * 0.08);
+            ctx.beginPath();
+            ctx.arc(tp.x, tp.y, 2.5 - i * 0.4, 0, Math.PI * 2);
+            ctx.fill();
+        }
+        ctx.globalAlpha = 1;
+
+        // Car body
+        ctx.globalAlpha = car.alpha;
+        ctx.fillStyle = c.main;
+        ctx.beginPath();
+        ctx.arc(sc.x, sc.y, 3, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Highlight
+        ctx.fillStyle = 'rgba(255,255,255,0.5)';
+        ctx.beginPath();
+        ctx.arc(sc.x - 0.5, sc.y - 0.5, 1.2, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.globalAlpha = 1;
+    }
+}
+
+function drawGameUI(t) {
+    // Week counter - top right area (below back link)
+    ctx.font = '600 13px "Helvetica Neue", Helvetica, Arial, sans-serif';
+    ctx.fillStyle = TEXT_DARK;
+    ctx.textAlign = 'right';
+    ctx.fillText(`WEEK ${week}`, W - 16, 50);
+
+    // Score
+    ctx.font = '300 28px "Helvetica Neue", Helvetica, Arial, sans-serif';
+    ctx.fillStyle = TEXT_COLOR;
+    ctx.fillText(`${score}`, W - 16, 78);
+
+    // Bottom bar - available items
+    const barY = H - 40;
+    const barX = W / 2 - 120;
+
+    ctx.font = '500 10px "Helvetica Neue", Helvetica, Arial, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#bbb';
+    ctx.fillText('AVAILABLE', W / 2, barY - 18);
+
+    const items = [
+        { label: 'Roads', count: availableItems.roads, color: '#aaa' },
+        { label: 'Roundabout', count: availableItems.roundabouts, color: '#d4a' },
+        { label: 'Motorway', count: availableItems.motorways, color: '#4a9' },
+        { label: 'Signals', count: availableItems.trafficLights, color: '#da4' }
+    ];
+
+    for (let i = 0; i < items.length; i++) {
+        const ix = barX + i * 65;
+        const item = items[i];
+
+        // Icon square
+        ctx.fillStyle = item.color;
+        ctx.globalAlpha = 0.6;
+        ctx.fillRect(ix, barY - 6, 12, 12);
+        ctx.globalAlpha = 1;
+
+        // Count
+        ctx.fillStyle = TEXT_COLOR;
+        ctx.font = '600 11px "Helvetica Neue", Helvetica, Arial, sans-serif';
+        ctx.textAlign = 'left';
+        ctx.fillText(`×${item.count}`, ix + 16, barY + 5);
+
+        // Label
+        ctx.fillStyle = '#bbb';
+        ctx.font = '400 8px "Helvetica Neue", Helvetica, Arial, sans-serif';
+        ctx.textAlign = 'left';
+        ctx.fillText(item.label, ix, barY + 18);
+    }
+
+    ctx.textAlign = 'left';
+}
+
+// ── FPS COUNTER ───────────────────────────────────────────────────
+let frameCount = 0;
+let fpsTime = 0;
+let fps = 60;
+
+// ── MAIN LOOP ─────────────────────────────────────────────────────
+let lastTime = 0;
+
+initCamera();
+initCars();
+
+function frame(timestamp) {
+    if (!lastTime) lastTime = timestamp;
+    const dt = Math.min(timestamp - lastTime, 50); // cap at 50ms
+    lastTime = timestamp;
+    gameTime += dt;
+
+    // FPS
+    frameCount++;
+    fpsTime += dt;
+    if (fpsTime >= 1000) {
+        fps = Math.round(frameCount * 1000 / fpsTime);
+        document.getElementById('stats').textContent = `FPS: ${fps}`;
+        frameCount = 0;
+        fpsTime = 0;
+    }
+
+    // Score increment
+    scoreTimer += dt;
+    if (scoreTimer > 2000 + Math.random() * 3000) {
+        score += Math.floor(Math.random() * 5) + 1;
+        scoreTimer = 0;
+    }
+
+    // Week increment
+    weekTimer += dt;
+    if (weekTimer > 20000) {
+        week++;
+        weekTimer = 0;
+        // Occasionally increase demand
+        const rd = destinations[Math.floor(Math.random() * destinations.length)];
+        rd.demand = Math.min(rd.demand + 1, 5);
+    }
+
+    // Update cars
+    for (const car of cars) {
+        car.update(dt);
+    }
+    // Remove dead cars and spawn new ones
+    cars = cars.filter(c => c.alive);
+    if (Math.random() < 0.002 * dt) {
+        spawnCar();
+    }
+    // Keep minimum car count
+    while (cars.length < 12) {
+        spawnCar();
+    }
+
+    // Occasionally satisfy demand
+    if (Math.random() < 0.0005 * dt) {
+        const d = destinations[Math.floor(Math.random() * destinations.length)];
+        if (d.demand > 0) {
+            d.demand--;
+            d.satisfied++;
+        }
+    }
+
+    // ── DRAW ──────────────────────────────────────────────────────
+    ctx.fillStyle = BG;
+    ctx.fillRect(0, 0, W, H);
+
+    drawWater();
+    drawPark();
+    drawHexGrid();
+    drawRoads();
+    drawCongestion(gameTime);
+    drawTrees(gameTime);
+    drawHouses();
+    drawDestinations(gameTime);
+    drawCars(gameTime);
+    drawGameUI(gameTime);
+
+    requestAnimationFrame(frame);
+}
+
+requestAnimationFrame(frame);
+
+// Handle resize
+window.addEventListener('resize', () => {
+    resize();
+    initCamera();
+});
+</script>
+</body>
+</html>

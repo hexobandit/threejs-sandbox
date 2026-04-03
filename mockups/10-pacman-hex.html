@@ -1,0 +1,714 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0,user-scalable=no">
+<title>10 / Pacman Hex</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{overflow:hidden;background:#0a0a1a;touch-action:none;-webkit-touch-callout:none;-webkit-user-select:none;user-select:none}
+canvas{display:block}
+#ui{position:fixed;top:0;left:0;padding:12px;font-family:'Courier New',monospace;color:#fff;pointer-events:none;z-index:10}
+#ui h1{font-size:14px;color:#ffcc00;margin-bottom:4px;text-shadow:0 0 8px #ffcc0066}
+#stats{font-size:11px;color:#ffcc00;margin-top:4px;text-shadow:0 0 6px #ffcc0044}
+#back{position:fixed;top:12px;right:12px;font-family:'Courier New',monospace;font-size:12px;color:#00ff88;text-decoration:none;z-index:10;text-shadow:0 0 8px #00ff8866}
+#back:hover{color:#44ffaa}
+</style>
+</head>
+<body>
+
+<div id="ui">
+  <h1>10 / PACMAN HEX</h1>
+  <div id="stats">FPS: --</div>
+</div>
+
+<a id="back" href="../index.html">&larr; back</a>
+
+<canvas id="main"></canvas>
+
+<script>
+// ── CANVAS SETUP ──────────────────────────────────────────────────
+const canvas = document.getElementById('main');
+const ctx = canvas.getContext('2d');
+const dpr = Math.min(window.devicePixelRatio, 2);
+let W, H;
+
+function resize() {
+  W = window.innerWidth;
+  H = window.innerHeight;
+  canvas.width = W * dpr;
+  canvas.height = H * dpr;
+  canvas.style.width = W + 'px';
+  canvas.style.height = H + 'px';
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+window.addEventListener('resize', resize);
+resize();
+
+// ── HEX GRID ─────────────────────────────────────────────────────
+const HEX_SIZE = 28;
+const S = 30; // size + gap
+const HEX_RADIUS = 8; // grid radius in hex coords
+
+function hexToPixel(q, r) {
+  return {
+    x: S * 1.5 * q,
+    y: S * Math.sqrt(3) * (r + q / 2)
+  };
+}
+
+function hexDist(q1, r1, q2, r2) {
+  return (Math.abs(q1 - q2) + Math.abs(q1 + r1 - q2 - r2) + Math.abs(r1 - r2)) / 2;
+}
+
+// Generate all hexes within radius
+const allHexes = [];
+for (let q = -HEX_RADIUS; q <= HEX_RADIUS; q++) {
+  for (let r = -HEX_RADIUS; r <= HEX_RADIUS; r++) {
+    const s = -q - r;
+    if (Math.abs(s) <= HEX_RADIUS) {
+      allHexes.push({ q, r, s });
+    }
+  }
+}
+
+// ── MAZE DEFINITION ──────────────────────────────────────────────
+// wall = true, path = false
+const wallSet = new Set();
+const ghostHouseSet = new Set();
+const hexKey = (q, r) => `${q},${r}`;
+
+// Ghost house: center 4 hexes
+const ghostHouseCoords = [
+  {q:0,r:0}, {q:1,r:0}, {q:0,r:1}, {q:1,r:-1}
+];
+ghostHouseCoords.forEach(h => ghostHouseSet.add(hexKey(h.q, h.r)));
+
+// Define walls - outer ring + internal maze structure
+function isWall(q, r) {
+  const s = -q - r;
+  const dist = Math.max(Math.abs(q), Math.abs(r), Math.abs(s));
+
+  // Outer ring: always wall
+  if (dist >= HEX_RADIUS) return true;
+  // Second ring: wall except at cardinal openings
+  if (dist === HEX_RADIUS - 1) {
+    // Create openings at 4 points
+    if (Math.abs(q) <= 1 && r === -(HEX_RADIUS-1) - Math.floor(q/2)) return false;
+    if (Math.abs(q) <= 1 && r === (HEX_RADIUS-1) - Math.ceil(q/2)) return false;
+    return true;
+  }
+
+  // Internal walls creating maze corridors
+  // Ring at dist 5
+  if (dist === 5) {
+    // Leave corridors open
+    if (q === 0 || r === 0 || s === 0) return false;
+    if (Math.abs(q) === 1 || Math.abs(r) === 1 || Math.abs(s) === 1) return false;
+    return true;
+  }
+
+  // Scattered internal walls for maze feel
+  // Horizontal bars
+  if (r === 0 && Math.abs(q) >= 3 && Math.abs(q) <= 4 && dist < 6) return true;
+  if (q === 0 && Math.abs(r) >= 3 && Math.abs(r) <= 4 && dist < 6) return true;
+
+  // Diagonal walls
+  if (q === r && Math.abs(q) >= 2 && Math.abs(q) <= 3 && dist < 6) return true;
+  if (q === -r && Math.abs(q) >= 2 && Math.abs(q) <= 3 && dist < 6 && q !== 0) return false;
+
+  // Small wall clusters
+  if (q === 2 && r === -4) return true;
+  if (q === -2 && r === 4) return true;
+  if (q === 4 && r === -2) return true;
+  if (q === -4 && r === 2) return true;
+  if (q === -2 && r === -2) return true;
+  if (q === 2 && r === 2) return true;
+
+  // Cross walls near center
+  if (dist === 2 && (q === 0 || r === 0 || s === 0) && !ghostHouseSet.has(hexKey(q, r))) {
+    // Only some of these
+    if ((q === 2 && r === -2) || (q === -2 && r === 2)) return true;
+  }
+
+  return false;
+}
+
+// Build wall/path sets
+const walls = new Set();
+const paths = [];
+allHexes.forEach(h => {
+  if (isWall(h.q, h.r)) {
+    walls.add(hexKey(h.q, h.r));
+  } else {
+    paths.push({ q: h.q, r: h.r });
+  }
+});
+
+// ── POWER PELLET LOCATIONS (4 corners) ───────────────────────────
+const powerPellets = [
+  { q: -5, r: -1 },
+  { q: 6, r: -5 },
+  { q: -1, r: 6 },
+  { q: 5, r: -6 }
+];
+// Adjust to valid path hexes
+powerPellets.forEach((p, i) => {
+  if (walls.has(hexKey(p.q, p.r))) {
+    // Find nearest path hex
+    let best = null, bestDist = 999;
+    paths.forEach(ph => {
+      const d = hexDist(p.q, p.r, ph.q, ph.r);
+      if (d < bestDist) { bestDist = d; best = ph; }
+    });
+    if (best) { powerPellets[i] = { q: best.q, r: best.r }; }
+  }
+});
+
+// ── PATH FINDING HELPERS ─────────────────────────────────────────
+function getNeighbors(q, r) {
+  const dirs = [[1,0],[-1,0],[0,1],[0,-1],[1,-1],[-1,1]];
+  const result = [];
+  dirs.forEach(([dq, dr]) => {
+    const nq = q + dq, nr = r + dr;
+    if (!walls.has(hexKey(nq, nr))) {
+      const s = -nq - nr;
+      if (Math.max(Math.abs(nq), Math.abs(nr), Math.abs(s)) <= HEX_RADIUS) {
+        result.push({ q: nq, r: nr });
+      }
+    }
+  });
+  return result;
+}
+
+// Simple BFS to find a path
+function findPath(sq, sr, eq, er) {
+  const start = hexKey(sq, sr), end = hexKey(eq, er);
+  if (start === end) return [{ q: sq, r: sr }];
+  const visited = new Set([start]);
+  const parent = new Map();
+  const queue = [{ q: sq, r: sr }];
+  while (queue.length > 0) {
+    const cur = queue.shift();
+    const neighbors = getNeighbors(cur.q, cur.r);
+    for (const n of neighbors) {
+      const nk = hexKey(n.q, n.r);
+      if (!visited.has(nk)) {
+        visited.add(nk);
+        parent.set(nk, cur);
+        if (nk === end) {
+          // Reconstruct
+          const path = [{ q: n.q, r: n.r }];
+          let c = cur;
+          while (c) {
+            path.unshift({ q: c.q, r: c.r });
+            c = parent.get(hexKey(c.q, c.r));
+          }
+          return path;
+        }
+        queue.push(n);
+      }
+    }
+  }
+  return [{ q: sq, r: sr }]; // No path found
+}
+
+// ── BUILD PACMAN ROUTE ───────────────────────────────────────────
+// Pacman traverses a long loop through the maze
+const pacmanWaypoints = [];
+// Collect a nice set of path hexes for pacman to visit
+const pathArray = paths.filter(p => !ghostHouseSet.has(hexKey(p.q, p.r)));
+
+// Create a circular-ish route through the maze
+const routeTargets = [
+  { q: -3, r: -1 }, { q: -5, r: 1 }, { q: -3, r: 3 },
+  { q: -1, r: 4 }, { q: 1, r: 3 }, { q: 3, r: 1 },
+  { q: 5, r: -2 }, { q: 3, r: -3 }, { q: 1, r: -4 },
+  { q: -1, r: -3 }, { q: -3, r: -1 }
+];
+
+// Snap targets to nearest valid path hex
+const snappedTargets = routeTargets.map(t => {
+  if (!walls.has(hexKey(t.q, t.r))) return t;
+  let best = null, bestD = 999;
+  pathArray.forEach(p => {
+    const d = hexDist(t.q, t.r, p.q, p.r);
+    if (d < bestD) { bestD = d; best = p; }
+  });
+  return best || t;
+});
+
+// Build full route by pathfinding between waypoints
+const fullRoute = [];
+for (let i = 0; i < snappedTargets.length - 1; i++) {
+  const a = snappedTargets[i], b = snappedTargets[i + 1];
+  const seg = findPath(a.q, a.r, b.q, b.r);
+  // Append without duplicating shared endpoint
+  if (fullRoute.length > 0) seg.shift();
+  fullRoute.push(...seg);
+}
+
+// ── GHOST ROUTES ─────────────────────────────────────────────────
+function buildGhostRoute(targets) {
+  const snapped = targets.map(t => {
+    if (!walls.has(hexKey(t.q, t.r))) return t;
+    let best = null, bestD = 999;
+    pathArray.forEach(p => {
+      const d = hexDist(t.q, t.r, p.q, p.r);
+      if (d < bestD) { bestD = d; best = p; }
+    });
+    return best || t;
+  });
+  const route = [];
+  for (let i = 0; i < snapped.length - 1; i++) {
+    const seg = findPath(snapped[i].q, snapped[i].r, snapped[i+1].q, snapped[i+1].r);
+    if (route.length > 0) seg.shift();
+    route.push(...seg);
+  }
+  return route;
+}
+
+const ghostDefs = [
+  {
+    name: 'Blinky', color: '#ff0000',
+    route: buildGhostRoute([
+      {q:2,r:-1},{q:4,r:-3},{q:3,r:-4},{q:1,r:-3},{q:-1,r:-2},{q:-3,r:0},{q:-2,r:1},{q:0,r:1},{q:2,r:-1}
+    ]),
+    speed: 0.72, frightened: false
+  },
+  {
+    name: 'Pinky', color: '#ffb8ff',
+    route: buildGhostRoute([
+      {q:-2,r:1},{q:-4,r:2},{q:-3,r:3},{q:-1,r:3},{q:1,r:2},{q:2,r:1},{q:1,r:-1},{q:-1,r:0},{q:-2,r:1}
+    ]),
+    speed: 0.68, frightened: false
+  },
+  {
+    name: 'Inky', color: '#00ffff',
+    route: buildGhostRoute([
+      {q:3,r:-2},{q:4,r:-1},{q:3,r:1},{q:1,r:2},{q:-1,r:2},{q:-3,r:1},{q:-2,r:-1},{q:0,r:-2},{q:3,r:-2}
+    ]),
+    speed: 0.65, frightened: false
+  },
+  {
+    name: 'Clyde', color: '#ffb852',
+    route: buildGhostRoute([
+      {q:-1,r:-2},{q:-3,r:-1},{q:-4,r:1},{q:-2,r:3},{q:0,r:3},{q:2,r:1},{q:4,r:-2},{q:2,r:-3},{q:-1,r:-2}
+    ]),
+    speed: 0.60, frightened: true  // This one is frightened
+  }
+];
+
+// ── GAME STATE ───────────────────────────────────────────────────
+let pacmanRouteIdx = 0;
+let pacmanLerpT = 0;
+const PACMAN_SPEED = 0.8; // hexes per second
+let mouthAngle = 0;
+let mouthDir = 1;
+
+let score = 2450;
+let scoreDisplay = 2450;
+const HIGH_SCORE = 12800;
+let readyAlpha = 1.0;
+let readyTimer = 0;
+
+// Track eaten dots
+const eatenDots = new Set();
+// Pre-eat dots along pacman's initial path (first ~40% of route to look mid-game)
+const preEatCount = Math.floor(fullRoute.length * 0.4);
+for (let i = 0; i < preEatCount; i++) {
+  eatenDots.add(hexKey(fullRoute[i].q, fullRoute[i].r));
+}
+pacmanRouteIdx = preEatCount - 1;
+pacmanLerpT = 0;
+
+// Ghost state
+const ghosts = ghostDefs.map(g => ({
+  ...g,
+  routeIdx: Math.floor(Math.random() * Math.max(1, g.route.length - 1)),
+  lerpT: 0,
+  x: 0, y: 0
+}));
+
+// Trail behind pacman
+const pacmanTrail = [];
+
+// ── DRAW HELPERS ─────────────────────────────────────────────────
+function drawHexagon(cx, cy, size, fill, stroke, lineWidth) {
+  ctx.beginPath();
+  for (let i = 0; i < 6; i++) {
+    const angle = Math.PI / 3 * i; // flat-top
+    const px = cx + size * Math.cos(angle);
+    const py = cy + size * Math.sin(angle);
+    if (i === 0) ctx.moveTo(px, py);
+    else ctx.lineTo(px, py);
+  }
+  ctx.closePath();
+  if (fill) {
+    ctx.fillStyle = fill;
+    ctx.fill();
+  }
+  if (stroke) {
+    ctx.strokeStyle = stroke;
+    ctx.lineWidth = lineWidth || 1;
+    ctx.stroke();
+  }
+}
+
+function drawGhostShape(cx, cy, size, color, frightenedFlash) {
+  ctx.save();
+  ctx.shadowColor = color;
+  ctx.shadowBlur = 12;
+
+  const w = size;
+  const h = size * 1.15;
+
+  ctx.beginPath();
+  // Rounded top (arc)
+  ctx.arc(cx, cy - h * 0.15, w, Math.PI, 0, false);
+  // Right side down
+  ctx.lineTo(cx + w, cy + h * 0.5);
+  // Wavy bottom
+  const waves = 4;
+  const waveW = (w * 2) / waves;
+  for (let i = 0; i < waves; i++) {
+    const wx = cx + w - waveW * i;
+    const wx2 = cx + w - waveW * (i + 0.5);
+    const wx3 = cx + w - waveW * (i + 1);
+    if (i % 2 === 0) {
+      ctx.quadraticCurveTo(wx2, cy + h * 0.75, wx3, cy + h * 0.5);
+    } else {
+      ctx.quadraticCurveTo(wx2, cy + h * 0.25, wx3, cy + h * 0.5);
+    }
+  }
+  ctx.closePath();
+
+  if (frightenedFlash) {
+    ctx.fillStyle = '#2222ff';
+  } else {
+    ctx.fillStyle = color;
+  }
+  ctx.fill();
+  ctx.restore();
+
+  // Eyes
+  if (frightenedFlash) {
+    // Frightened face: small white dots and zigzag mouth
+    ctx.fillStyle = '#fff';
+    ctx.beginPath();
+    ctx.arc(cx - w * 0.28, cy - h * 0.2, w * 0.15, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(cx + w * 0.28, cy - h * 0.2, w * 0.15, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Zigzag mouth
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    const mouthY = cy + h * 0.12;
+    const mouthW = w * 0.6;
+    const teeth = 4;
+    const tw = mouthW / teeth;
+    ctx.moveTo(cx - mouthW / 2, mouthY);
+    for (let i = 0; i < teeth; i++) {
+      const tx = cx - mouthW / 2 + tw * (i + 0.5);
+      const ty = mouthY + (i % 2 === 0 ? -3 : 3);
+      ctx.lineTo(tx, ty);
+    }
+    ctx.lineTo(cx + mouthW / 2, mouthY);
+    ctx.stroke();
+  } else {
+    // Normal eyes
+    const eyeOffX = w * 0.28;
+    const eyeY = cy - h * 0.2;
+    const eyeR = w * 0.22;
+    const pupilR = w * 0.12;
+
+    for (let side = -1; side <= 1; side += 2) {
+      // White
+      ctx.fillStyle = '#fff';
+      ctx.beginPath();
+      ctx.arc(cx + eyeOffX * side, eyeY, eyeR, 0, Math.PI * 2);
+      ctx.fill();
+      // Pupil (blue)
+      ctx.fillStyle = '#2222cc';
+      ctx.beginPath();
+      ctx.arc(cx + eyeOffX * side + pupilR * 0.3, eyeY + pupilR * 0.2, pupilR, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+}
+
+function drawPacman(cx, cy, size, angle, mouthOpen) {
+  ctx.save();
+  ctx.shadowColor = '#ffff00';
+  ctx.shadowBlur = 16;
+
+  const mouth = mouthOpen * 0.4; // max 0.4 radians per side
+  ctx.fillStyle = '#ffdd00';
+  ctx.beginPath();
+  ctx.arc(cx, cy, size, angle + mouth, angle + Math.PI * 2 - mouth);
+  ctx.lineTo(cx, cy);
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawSmallPacman(cx, cy, size) {
+  ctx.fillStyle = '#ffdd00';
+  ctx.beginPath();
+  ctx.arc(cx, cy, size, 0.3, Math.PI * 2 - 0.3);
+  ctx.lineTo(cx, cy);
+  ctx.closePath();
+  ctx.fill();
+}
+
+// ── FPS COUNTER ──────────────────────────────────────────────────
+let fps = 0, frameCount = 0, lastFPSTime = performance.now();
+
+// ── ANIMATION LOOP ───────────────────────────────────────────────
+let lastTime = performance.now();
+
+function update(now) {
+  const dt = Math.min((now - lastTime) / 1000, 0.1);
+  lastTime = now;
+
+  // FPS
+  frameCount++;
+  if (now - lastFPSTime > 500) {
+    fps = Math.round(frameCount / ((now - lastFPSTime) / 1000));
+    frameCount = 0;
+    lastFPSTime = now;
+    document.getElementById('stats').textContent = `FPS: ${fps}`;
+  }
+
+  // ── Update Pacman ──
+  if (fullRoute.length > 1) {
+    pacmanLerpT += PACMAN_SPEED * dt;
+    while (pacmanLerpT >= 1 && pacmanRouteIdx < fullRoute.length - 2) {
+      pacmanLerpT -= 1;
+      pacmanRouteIdx++;
+      const h = fullRoute[pacmanRouteIdx];
+      const k = hexKey(h.q, h.r);
+      if (!eatenDots.has(k) && !walls.has(k)) {
+        eatenDots.add(k);
+        score += 10;
+      }
+    }
+    // Loop
+    if (pacmanRouteIdx >= fullRoute.length - 2) {
+      pacmanRouteIdx = 0;
+      pacmanLerpT = 0;
+    }
+  }
+
+  // Mouth animation
+  mouthAngle += mouthDir * dt * 8;
+  if (mouthAngle > 1) { mouthAngle = 1; mouthDir = -1; }
+  if (mouthAngle < 0.05) { mouthAngle = 0.05; mouthDir = 1; }
+
+  // Score display smooth
+  if (scoreDisplay < score) scoreDisplay = Math.min(scoreDisplay + 50 * dt, score);
+
+  // Ready text
+  readyTimer += dt;
+  if (readyTimer < 2) {
+    readyAlpha = 1;
+  } else if (readyTimer < 3) {
+    readyAlpha = 1 - (readyTimer - 2);
+  } else {
+    readyAlpha = 0;
+  }
+
+  // Update ghosts
+  ghosts.forEach(g => {
+    if (g.route.length < 2) return;
+    g.lerpT += g.speed * dt;
+    while (g.lerpT >= 1 && g.routeIdx < g.route.length - 2) {
+      g.lerpT -= 1;
+      g.routeIdx++;
+    }
+    if (g.routeIdx >= g.route.length - 2) {
+      g.routeIdx = 0;
+      g.lerpT = 0;
+    }
+  });
+
+  // ── RENDER ──
+  ctx.clearRect(0, 0, W, H);
+
+  // Camera: center on grid center
+  const centerX = W / 2;
+  const centerY = H / 2;
+
+  ctx.save();
+  ctx.translate(centerX, centerY);
+
+  // ── Draw maze (walls & paths) ──
+  allHexes.forEach(h => {
+    const pos = hexToPixel(h.q, h.r);
+    const key = hexKey(h.q, h.r);
+    const isGhostHouse = ghostHouseSet.has(key);
+    const isW = walls.has(key);
+
+    if (isGhostHouse) {
+      // Ghost house: outlined differently
+      drawHexagon(pos.x, pos.y, HEX_SIZE * 0.48, '#0e0e2a', '#ff88ff', 1.5);
+    } else if (isW) {
+      // Wall
+      drawHexagon(pos.x, pos.y, HEX_SIZE * 0.48, '#1a1a4a', '#4444ff', 2);
+    } else {
+      // Path
+      drawHexagon(pos.x, pos.y, HEX_SIZE * 0.48, '#0a0a0a', '#222244', 0.5);
+    }
+  });
+
+  // ── Draw dots ──
+  paths.forEach(p => {
+    const key = hexKey(p.q, p.r);
+    if (eatenDots.has(key)) return;
+    if (ghostHouseSet.has(key)) return;
+
+    const pos = hexToPixel(p.q, p.r);
+
+    // Check if this is a power pellet location
+    const isPower = powerPellets.some(pp => pp.q === p.q && pp.r === p.r);
+    if (isPower) return; // drawn separately
+
+    ctx.fillStyle = '#ffcc00';
+    ctx.beginPath();
+    ctx.arc(pos.x, pos.y, 3, 0, Math.PI * 2);
+    ctx.fill();
+  });
+
+  // ── Draw power pellets (pulsing) ──
+  const pulseT = now / 1000;
+  powerPellets.forEach(pp => {
+    const pos = hexToPixel(pp.q, pp.r);
+    const key = hexKey(pp.q, pp.r);
+    if (eatenDots.has(key)) return;
+
+    const pulse = 5 + Math.sin(pulseT * 4) * 2;
+    ctx.save();
+    ctx.shadowColor = '#ffffaa';
+    ctx.shadowBlur = 15 + Math.sin(pulseT * 4) * 5;
+    ctx.fillStyle = `rgba(255, 255, ${180 + Math.sin(pulseT * 3) * 75}, ${0.8 + Math.sin(pulseT * 4) * 0.2})`;
+    ctx.beginPath();
+    ctx.arc(pos.x, pos.y, pulse, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  });
+
+  // ── Draw Pacman trail ──
+  if (fullRoute.length > 1) {
+    const trailLen = 8;
+    for (let i = 0; i < trailLen; i++) {
+      const ti = pacmanRouteIdx - i - 1;
+      if (ti < 0) break;
+      const th = fullRoute[ti];
+      const pos = hexToPixel(th.q, th.r);
+      const alpha = (1 - i / trailLen) * 0.3;
+      ctx.fillStyle = `rgba(255, 220, 0, ${alpha})`;
+      ctx.beginPath();
+      ctx.arc(pos.x, pos.y, 6 - i * 0.5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  // ── Draw Pacman ──
+  if (fullRoute.length > 1) {
+    const cur = fullRoute[pacmanRouteIdx];
+    const nxt = fullRoute[Math.min(pacmanRouteIdx + 1, fullRoute.length - 1)];
+    const p1 = hexToPixel(cur.q, cur.r);
+    const p2 = hexToPixel(nxt.q, nxt.r);
+    const t = pacmanLerpT;
+    const px = p1.x + (p2.x - p1.x) * t;
+    const py = p1.y + (p2.y - p1.y) * t;
+
+    // Movement direction angle
+    const moveAngle = Math.atan2(p2.y - p1.y, p2.x - p1.x);
+
+    drawPacman(px, py, 11, moveAngle, mouthAngle);
+  }
+
+  // ── Draw Ghosts ──
+  ghosts.forEach(g => {
+    if (g.route.length < 2) return;
+    const cur = g.route[g.routeIdx];
+    const nxt = g.route[Math.min(g.routeIdx + 1, g.route.length - 1)];
+    const p1 = hexToPixel(cur.q, cur.r);
+    const p2 = hexToPixel(nxt.q, nxt.r);
+    const t = g.lerpT;
+    const gx = p1.x + (p2.x - p1.x) * t;
+    const gy = p1.y + (p2.y - p1.y) * t;
+
+    // Frightened flash
+    let frightenedFlash = false;
+    if (g.frightened) {
+      frightenedFlash = Math.sin(now / 150) > 0; // flash blue/white
+    }
+
+    drawGhostShape(gx, gy, 10, g.color, g.frightened ? !frightenedFlash : false);
+
+    // If frightened and in flash, draw white version
+    if (g.frightened && frightenedFlash) {
+      ctx.save();
+      ctx.globalAlpha = 0.6;
+      drawGhostShape(gx, gy, 10, '#ffffff', true);
+      ctx.restore();
+    }
+  });
+
+  // ── READY! text ──
+  if (readyAlpha > 0.01) {
+    ctx.save();
+    ctx.globalAlpha = readyAlpha;
+    ctx.font = 'bold 28px "Courier New", monospace';
+    ctx.fillStyle = '#ffff00';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.shadowColor = '#ffff00';
+    ctx.shadowBlur = 20;
+    ctx.fillText('READY!', 0, -S * Math.sqrt(3) * 1.5);
+    ctx.restore();
+  }
+
+  ctx.restore(); // un-translate
+
+  // ── SCORE DISPLAY ──
+  ctx.save();
+  ctx.font = 'bold 18px "Courier New", monospace';
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#ffffff';
+  ctx.shadowColor = '#ffffff';
+  ctx.shadowBlur = 6;
+  ctx.fillText(`SCORE: ${Math.floor(scoreDisplay)}`, W / 2, 36);
+  ctx.font = '14px "Courier New", monospace';
+  ctx.fillStyle = '#888888';
+  ctx.shadowBlur = 0;
+  ctx.fillText(`HIGH: ${HIGH_SCORE}`, W / 2, 56);
+  ctx.restore();
+
+  // ── LIVES (bottom-left) ──
+  for (let i = 0; i < 3; i++) {
+    drawSmallPacman(30 + i * 28, H - 30, 10);
+  }
+
+  // ── Ghost names legend (bottom-right) ──
+  ctx.save();
+  ctx.font = '10px "Courier New", monospace';
+  ctx.textAlign = 'right';
+  ghosts.forEach((g, i) => {
+    ctx.fillStyle = g.frightened ? '#2222ff' : g.color;
+    ctx.fillText(`${g.frightened ? 'FRIGHTENED' : g.name.toUpperCase()}`, W - 20, H - 60 + i * 14);
+  });
+  ctx.restore();
+
+  requestAnimationFrame(update);
+}
+
+requestAnimationFrame(update);
+</script>
+</body>
+</html>

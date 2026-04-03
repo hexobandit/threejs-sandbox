@@ -1,0 +1,1045 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>18 — Canyon Run</title>
+    <style>
+        *{margin:0;padding:0}body{overflow:hidden;background:#000;touch-action:none}canvas{display:block}
+        #ui{position:fixed;top:0;left:0;padding:12px;font-family:'Courier New',monospace;color:#fff;pointer-events:none;z-index:10}
+        #ui h1{font-size:14px;color:#00ff88;margin-bottom:4px}
+        #ui p{font-size:11px;color:#888;line-height:1.4;max-width:280px}
+        #stats{font-size:11px;color:#ffcc00;margin-top:8px}
+        #back{position:fixed;top:12px;right:12px;font-family:'Courier New',monospace;font-size:12px;color:#00ff88;text-decoration:none;z-index:10}
+        #speed{position:fixed;bottom:20px;right:20px;font-family:'Courier New',monospace;font-size:24px;color:#00ffff;z-index:10;pointer-events:none;text-shadow:0 0 20px #00ffff88}
+        #hud{position:fixed;bottom:12px;left:12px;font-family:'Courier New',monospace;font-size:11px;color:#00ff88;z-index:10;pointer-events:none}
+        #warning{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);font-family:'Courier New',monospace;font-size:10px;color:#ff4444;z-index:10;pointer-events:none;opacity:0;letter-spacing:4px}
+    </style>
+</head>
+<body>
+<div id="ui">
+    <h1>18 / CANYON RUN</h1>
+    <p>High-speed trench run · Speed lines · Obstacles · Pursuit</p>
+    <div id="stats">-- FPS</div>
+</div>
+<a id="back" href="../index.html">&larr; back</a>
+<div id="speed">1247 <span style="font-size:11px">MKS</span></div>
+<div id="hud">
+    TRENCH RUN &middot; SECTOR 7 &middot; DISTANCE: 12.4 KM<br>
+    WARNING: PURSUIT DETECTED
+</div>
+<div id="warning">!! PROXIMITY ALERT !!</div>
+<script type="importmap">
+{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"}}
+</script>
+<script type="module">
+import * as THREE from 'three';
+
+// --- Renderer ---
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setClearColor(0x050510);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.1;
+document.body.appendChild(renderer.domElement);
+
+// --- Scene ---
+const scene = new THREE.Scene();
+scene.fog = new THREE.FogExp2(0x050510, 0.008);
+
+// --- Camera (PerspectiveCamera FOV 75 for speed) ---
+let aspect = window.innerWidth / window.innerHeight;
+const camera = new THREE.PerspectiveCamera(75, aspect, 0.1, 500);
+camera.position.set(0, 2, 0);
+
+// --- Constants ---
+const CANYON_LENGTH = 200;
+const CANYON_SEGMENT = 4;
+const CANYON_HALF_WIDTH = 4;
+const WALL_X = 5;
+const SHIP_BASE_Z = -8;
+const SPEED = 18; // units per second
+
+// --- Materials ---
+const wallMat = new THREE.MeshStandardMaterial({
+    color: 0x2a2a35,
+    roughness: 0.4,
+    metalness: 0.6,
+    emissive: 0x0a1520,
+    emissiveIntensity: 0.15
+});
+
+const wallEdgeMat = new THREE.MeshStandardMaterial({
+    color: 0x1a2a35,
+    roughness: 0.3,
+    metalness: 0.7,
+    emissive: 0x003344,
+    emissiveIntensity: 0.3
+});
+
+const floorMat = new THREE.MeshStandardMaterial({
+    color: 0x1a1a22,
+    roughness: 0.6,
+    metalness: 0.3
+});
+
+const floorMat2 = new THREE.MeshStandardMaterial({
+    color: 0x161620,
+    roughness: 0.6,
+    metalness: 0.3
+});
+
+const cyanEmissive = new THREE.MeshStandardMaterial({
+    color: 0x00ffff,
+    emissive: 0x00ffff,
+    emissiveIntensity: 2.0,
+    roughness: 0.1,
+    metalness: 0.0
+});
+
+const beamMat = new THREE.MeshStandardMaterial({
+    color: 0x222233,
+    roughness: 0.5,
+    metalness: 0.7,
+    emissive: 0x0a1520,
+    emissiveIntensity: 0.1
+});
+
+const warningRedMat = new THREE.MeshStandardMaterial({
+    color: 0xff2200,
+    emissive: 0xff2200,
+    emissiveIntensity: 0.5,
+    roughness: 0.4,
+    metalness: 0.3
+});
+
+const warningYellowMat = new THREE.MeshStandardMaterial({
+    color: 0xffcc00,
+    emissive: 0xffcc00,
+    emissiveIntensity: 0.5,
+    roughness: 0.4,
+    metalness: 0.3
+});
+
+// --- Canyon Group (we'll move this to create infinite scroll) ---
+const canyonGroup = new THREE.Group();
+scene.add(canyonGroup);
+
+// Random heights stored for consistency
+const wallData = [];
+
+// Generate canyon walls
+for (let z = 0; z > -CANYON_LENGTH; z -= CANYON_SEGMENT) {
+    const leftHeight = 3 + Math.random() * 5;
+    const rightHeight = 3 + Math.random() * 5;
+    wallData.push({ z, leftHeight, rightHeight });
+
+    // Left wall
+    const leftWall = new THREE.Mesh(
+        new THREE.BoxGeometry(2, leftHeight, CANYON_SEGMENT),
+        wallMat
+    );
+    leftWall.position.set(-WALL_X, leftHeight / 2, z);
+    leftWall.castShadow = true;
+    leftWall.receiveShadow = true;
+    canyonGroup.add(leftWall);
+
+    // Left wall edge trim (cyan tint strip on inner face)
+    const leftEdge = new THREE.Mesh(
+        new THREE.BoxGeometry(0.05, leftHeight, CANYON_SEGMENT),
+        wallEdgeMat
+    );
+    leftEdge.position.set(-WALL_X + 1.025, leftHeight / 2, z);
+    canyonGroup.add(leftEdge);
+
+    // Right wall
+    const rightWall = new THREE.Mesh(
+        new THREE.BoxGeometry(2, rightHeight, CANYON_SEGMENT),
+        wallMat
+    );
+    rightWall.position.set(WALL_X, rightHeight / 2, z);
+    rightWall.castShadow = true;
+    rightWall.receiveShadow = true;
+    canyonGroup.add(rightWall);
+
+    // Right wall edge trim
+    const rightEdge = new THREE.Mesh(
+        new THREE.BoxGeometry(0.05, rightHeight, CANYON_SEGMENT),
+        wallEdgeMat
+    );
+    rightEdge.position.set(WALL_X - 1.025, rightHeight / 2, z);
+    canyonGroup.add(rightEdge);
+
+    // Floor panels (alternating shades)
+    const floorPanel = new THREE.Mesh(
+        new THREE.BoxGeometry(2 * WALL_X - 2, 0.05, CANYON_SEGMENT),
+        Math.floor(Math.abs(z) / CANYON_SEGMENT) % 2 === 0 ? floorMat : floorMat2
+    );
+    floorPanel.position.set(0, -0.025, z);
+    floorPanel.receiveShadow = true;
+    canyonGroup.add(floorPanel);
+
+    // Floor grid line
+    const gridLine = new THREE.Mesh(
+        new THREE.BoxGeometry(2 * WALL_X - 2, 0.02, 0.04),
+        new THREE.MeshStandardMaterial({ color: 0x334455, emissive: 0x112233, emissiveIntensity: 0.5 })
+    );
+    gridLine.position.set(0, 0.01, z + CANYON_SEGMENT / 2);
+    canyonGroup.add(gridLine);
+
+    // Floor lights every 8 units
+    if (Math.floor(Math.abs(z) / CANYON_SEGMENT) % 2 === 0) {
+        const floorLight = new THREE.Mesh(
+            new THREE.BoxGeometry(0.6, 0.02, 0.15),
+            cyanEmissive
+        );
+        floorLight.position.set(0, 0.02, z);
+        canyonGroup.add(floorLight);
+
+        // Also place small lights near walls
+        const leftFloorLight = new THREE.Mesh(
+            new THREE.BoxGeometry(0.15, 0.02, 0.4),
+            cyanEmissive
+        );
+        leftFloorLight.position.set(-WALL_X + 1.3, 0.02, z);
+        canyonGroup.add(leftFloorLight);
+
+        const rightFloorLight = new THREE.Mesh(
+            new THREE.BoxGeometry(0.15, 0.02, 0.4),
+            cyanEmissive
+        );
+        rightFloorLight.position.set(WALL_X - 1.3, 0.02, z);
+        canyonGroup.add(rightFloorLight);
+    }
+}
+
+// --- Tunnel beams (overhead connectors) ---
+const beams = [];
+for (let z = -20; z > -CANYON_LENGTH; z -= 40) {
+    const beamGeo = new THREE.BoxGeometry(2 * WALL_X + 2, 0.4, 1.0);
+    const beam = new THREE.Mesh(beamGeo, beamMat);
+    beam.position.set(0, 7, z);
+    beam.castShadow = true;
+    canyonGroup.add(beam);
+    beams.push(beam);
+
+    // Side struts
+    const leftStrut = new THREE.Mesh(
+        new THREE.BoxGeometry(0.3, 4, 0.6),
+        beamMat
+    );
+    leftStrut.position.set(-WALL_X + 0.5, 5, z);
+    canyonGroup.add(leftStrut);
+
+    const rightStrut = new THREE.Mesh(
+        new THREE.BoxGeometry(0.3, 4, 0.6),
+        beamMat
+    );
+    rightStrut.position.set(WALL_X - 0.5, 5, z);
+    canyonGroup.add(rightStrut);
+
+    // Beam light
+    const beamLight = new THREE.Mesh(
+        new THREE.BoxGeometry(4, 0.06, 0.3),
+        cyanEmissive
+    );
+    beamLight.position.set(0, 6.78, z);
+    canyonGroup.add(beamLight);
+}
+
+// --- Obstacles (barrier walls with gaps) ---
+const obstacles = [];
+const obstacleConfigs = [
+    { z: -40, gapCenter: 1.5, gapWidth: 3, warning: false },
+    { z: -85, gapCenter: -1.5, gapWidth: 2.8, warning: true },
+    { z: -130, gapCenter: 0.5, gapWidth: 3, warning: false },
+    { z: -170, gapCenter: -1, gapWidth: 2.5, warning: false }
+];
+
+obstacleConfigs.forEach(cfg => {
+    const obstGroup = new THREE.Group();
+    obstGroup.position.set(0, 0, cfg.z);
+
+    const barrierHeight = 3;
+    const halfCanyon = WALL_X - 1;
+
+    // Left section (from left wall to gap)
+    const leftEnd = cfg.gapCenter - cfg.gapWidth / 2;
+    if (leftEnd > -halfCanyon) {
+        const leftWidth = leftEnd - (-halfCanyon);
+        const leftBarrier = new THREE.Mesh(
+            new THREE.BoxGeometry(leftWidth, barrierHeight, 0.5),
+            cfg.warning ? warningRedMat : wallMat
+        );
+        leftBarrier.position.set(-halfCanyon + leftWidth / 2, barrierHeight / 2, 0);
+        leftBarrier.castShadow = true;
+        obstGroup.add(leftBarrier);
+    }
+
+    // Right section (from gap to right wall)
+    const rightStart = cfg.gapCenter + cfg.gapWidth / 2;
+    if (rightStart < halfCanyon) {
+        const rightWidth = halfCanyon - rightStart;
+        const rightBarrier = new THREE.Mesh(
+            new THREE.BoxGeometry(rightWidth, barrierHeight, 0.5),
+            cfg.warning ? warningRedMat : wallMat
+        );
+        rightBarrier.position.set(rightStart + rightWidth / 2, barrierHeight / 2, 0);
+        rightBarrier.castShadow = true;
+        obstGroup.add(rightBarrier);
+    }
+
+    // Warning stripes on the dangerous one
+    if (cfg.warning) {
+        for (let s = -halfCanyon; s < halfCanyon; s += 0.5) {
+            const inGap = s >= (cfg.gapCenter - cfg.gapWidth / 2) && s <= (cfg.gapCenter + cfg.gapWidth / 2);
+            if (inGap) continue;
+            const stripe = new THREE.Mesh(
+                new THREE.BoxGeometry(0.25, 0.25, 0.52),
+                Math.floor((s + halfCanyon) / 0.5) % 2 === 0 ? warningRedMat : warningYellowMat
+            );
+            stripe.position.set(s + 0.125, barrierHeight + 0.125, 0);
+            obstGroup.add(stripe);
+        }
+    }
+
+    // Top beam
+    const topBeam = new THREE.Mesh(
+        new THREE.BoxGeometry(2 * halfCanyon, 0.3, 0.5),
+        wallMat
+    );
+    topBeam.position.set(0, barrierHeight, 0);
+    obstGroup.add(topBeam);
+
+    canyonGroup.add(obstGroup);
+    obstacles.push({ ...cfg, group: obstGroup });
+});
+
+// --- Light shafts (volumetric feel) ---
+const shaftMat = new THREE.MeshBasicMaterial({
+    color: 0x88bbff,
+    transparent: true,
+    opacity: 0.04,
+    side: THREE.DoubleSide
+});
+
+for (let i = 0; i < 3; i++) {
+    const shaftGeo = new THREE.PlaneGeometry(1.5, 12);
+    const shaft = new THREE.Mesh(shaftGeo, shaftMat);
+    shaft.position.set(-2 + i * 2, 4, -30 - i * 55);
+    shaft.rotation.x = -0.2;
+    shaft.rotation.z = 0.3 - i * 0.15;
+    canyonGroup.add(shaft);
+
+    // Duplicate for thickness
+    const shaft2 = shaft.clone();
+    shaft2.position.x += 0.3;
+    shaft2.rotation.z += 0.05;
+    canyonGroup.add(shaft2);
+}
+
+// --- Build the player ship ---
+const shipGroup = new THREE.Group();
+
+const fuselageMat = new THREE.MeshStandardMaterial({
+    color: 0x556677,
+    roughness: 0.3,
+    metalness: 0.8,
+    emissive: 0x112233,
+    emissiveIntensity: 0.1
+});
+
+const wingMat = new THREE.MeshStandardMaterial({
+    color: 0x445566,
+    roughness: 0.3,
+    metalness: 0.7,
+    emissive: 0x0a1520,
+    emissiveIntensity: 0.1
+});
+
+// Fuselage
+const fuselage = new THREE.Mesh(
+    new THREE.BoxGeometry(0.3, 0.15, 1.5),
+    fuselageMat
+);
+shipGroup.add(fuselage);
+
+// Cockpit (front taper)
+const cockpit = new THREE.Mesh(
+    new THREE.BoxGeometry(0.2, 0.1, 0.4),
+    new THREE.MeshStandardMaterial({ color: 0x224466, roughness: 0.1, metalness: 0.9, emissive: 0x003355, emissiveIntensity: 0.3 })
+);
+cockpit.position.set(0, 0.05, -0.7);
+shipGroup.add(cockpit);
+
+// Wings
+const leftWing = new THREE.Mesh(
+    new THREE.BoxGeometry(1.2, 0.02, 0.4),
+    wingMat
+);
+leftWing.position.set(-0.45, -0.02, 0.15);
+leftWing.rotation.z = -0.05;
+shipGroup.add(leftWing);
+
+const rightWing = leftWing.clone();
+rightWing.position.x = 0.45;
+rightWing.rotation.z = 0.05;
+shipGroup.add(rightWing);
+
+// Wing tips
+const leftWingTip = new THREE.Mesh(
+    new THREE.BoxGeometry(0.15, 0.06, 0.25),
+    fuselageMat
+);
+leftWingTip.position.set(-1.0, -0.02, 0.2);
+shipGroup.add(leftWingTip);
+
+const rightWingTip = leftWingTip.clone();
+rightWingTip.position.x = 1.0;
+shipGroup.add(rightWingTip);
+
+// Vertical stabilizers (angled outward)
+const leftStab = new THREE.Mesh(
+    new THREE.BoxGeometry(0.02, 0.2, 0.3),
+    wingMat
+);
+leftStab.position.set(-0.25, 0.12, 0.55);
+leftStab.rotation.z = 0.3;
+shipGroup.add(leftStab);
+
+const rightStab = leftStab.clone();
+rightStab.position.x = 0.25;
+rightStab.rotation.z = -0.3;
+shipGroup.add(rightStab);
+
+// Engine housings
+const leftEngine = new THREE.Mesh(
+    new THREE.BoxGeometry(0.18, 0.12, 0.4),
+    fuselageMat
+);
+leftEngine.position.set(-0.3, -0.02, 0.6);
+shipGroup.add(leftEngine);
+
+const rightEngine = leftEngine.clone();
+rightEngine.position.x = 0.3;
+shipGroup.add(rightEngine);
+
+// Engine glows (spheres)
+const engineGlowMat = new THREE.MeshStandardMaterial({
+    color: 0x00ffff,
+    emissive: 0x00ffff,
+    emissiveIntensity: 3.0,
+    roughness: 0.0,
+    metalness: 0.0
+});
+
+const leftGlow = new THREE.Mesh(
+    new THREE.SphereGeometry(0.07, 8, 8),
+    engineGlowMat
+);
+leftGlow.position.set(-0.3, -0.02, 0.82);
+shipGroup.add(leftGlow);
+
+const rightGlow = leftGlow.clone();
+rightGlow.position.x = 0.3;
+shipGroup.add(rightGlow);
+
+// Engine light (illuminates nearby walls)
+const engineLight = new THREE.PointLight(0x00ccff, 2, 8, 2);
+engineLight.position.set(0, 0, 1.0);
+shipGroup.add(engineLight);
+
+shipGroup.position.set(0, 1, SHIP_BASE_Z);
+scene.add(shipGroup);
+
+// --- Engine exhaust particles ---
+const EXHAUST_COUNT = 300;
+const exhaustPositions = new Float32Array(EXHAUST_COUNT * 3);
+const exhaustColors = new Float32Array(EXHAUST_COUNT * 3);
+const exhaustSizes = new Float32Array(EXHAUST_COUNT);
+const exhaustVelocities = [];
+
+for (let i = 0; i < EXHAUST_COUNT; i++) {
+    const side = i % 2 === 0 ? -0.3 : 0.3;
+    exhaustPositions[i * 3] = side + (Math.random() - 0.5) * 0.08;
+    exhaustPositions[i * 3 + 1] = 1 + (Math.random() - 0.5) * 0.06;
+    exhaustPositions[i * 3 + 2] = SHIP_BASE_Z + 0.85 + Math.random() * 3;
+    exhaustColors[i * 3] = 0;
+    exhaustColors[i * 3 + 1] = 0.8 + Math.random() * 0.2;
+    exhaustColors[i * 3 + 2] = 1.0;
+    exhaustSizes[i] = 0.02 + Math.random() * 0.04;
+    exhaustVelocities.push({
+        x: (Math.random() - 0.5) * 0.3,
+        y: (Math.random() - 0.5) * 0.2,
+        z: 2 + Math.random() * 4,
+        life: Math.random()
+    });
+}
+
+const exhaustGeo = new THREE.BufferGeometry();
+exhaustGeo.setAttribute('position', new THREE.BufferAttribute(exhaustPositions, 3));
+exhaustGeo.setAttribute('color', new THREE.BufferAttribute(exhaustColors, 3));
+exhaustGeo.setAttribute('size', new THREE.BufferAttribute(exhaustSizes, 1));
+
+const exhaustMat = new THREE.PointsMaterial({
+    size: 0.06,
+    vertexColors: true,
+    transparent: true,
+    opacity: 0.8,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false
+});
+
+const exhaustParticles = new THREE.Points(exhaustGeo, exhaustMat);
+scene.add(exhaustParticles);
+
+// --- Speed lines ---
+const SPEED_LINE_COUNT = 180;
+const speedLinePositions = new Float32Array(SPEED_LINE_COUNT * 6); // 2 verts per line
+const speedLineColors = new Float32Array(SPEED_LINE_COUNT * 6);
+const speedLineData = [];
+
+for (let i = 0; i < SPEED_LINE_COUNT; i++) {
+    const x = (Math.random() - 0.5) * 10;
+    const y = Math.random() * 6 + 0.5;
+    const z = -Math.random() * 80;
+    const len = 0.5 + Math.random() * 2.0;
+    speedLineData.push({ x, y, z, len, speed: 30 + Math.random() * 40 });
+
+    const idx = i * 6;
+    speedLinePositions[idx] = x;
+    speedLinePositions[idx + 1] = y;
+    speedLinePositions[idx + 2] = z;
+    speedLinePositions[idx + 3] = x;
+    speedLinePositions[idx + 4] = y;
+    speedLinePositions[idx + 5] = z + len;
+
+    const brightness = 0.3 + Math.random() * 0.4;
+    speedLineColors[idx] = brightness * 0.7;
+    speedLineColors[idx + 1] = brightness * 0.9;
+    speedLineColors[idx + 2] = brightness;
+    speedLineColors[idx + 3] = 0;
+    speedLineColors[idx + 4] = 0;
+    speedLineColors[idx + 5] = 0;
+}
+
+const speedLineGeo = new THREE.BufferGeometry();
+speedLineGeo.setAttribute('position', new THREE.BufferAttribute(speedLinePositions, 3));
+speedLineGeo.setAttribute('color', new THREE.BufferAttribute(speedLineColors, 3));
+
+const speedLineMat = new THREE.LineBasicMaterial({
+    vertexColors: true,
+    transparent: true,
+    opacity: 0.5,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false
+});
+
+const speedLines = new THREE.LineSegments(speedLineGeo, speedLineMat);
+scene.add(speedLines);
+
+// --- Other ships ahead ---
+function buildOtherShip(color) {
+    const group = new THREE.Group();
+    const mat = new THREE.MeshStandardMaterial({
+        color: color,
+        roughness: 0.3,
+        metalness: 0.7,
+        emissive: color,
+        emissiveIntensity: 0.1
+    });
+    const body = new THREE.Mesh(new THREE.BoxGeometry(0.25, 0.12, 1.2), mat);
+    group.add(body);
+    const wing = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.02, 0.3), mat);
+    wing.position.z = 0.1;
+    group.add(wing);
+
+    // Engine glow
+    const eng1 = new THREE.Mesh(new THREE.SphereGeometry(0.05, 6, 6), engineGlowMat);
+    eng1.position.set(-0.2, 0, 0.65);
+    group.add(eng1);
+    const eng2 = eng1.clone();
+    eng2.position.x = 0.2;
+    group.add(eng2);
+
+    // Engine light
+    const eLight = new THREE.PointLight(0x00ccff, 1, 5, 2);
+    eLight.position.set(0, 0, 0.7);
+    group.add(eLight);
+
+    return group;
+}
+
+const otherShip1 = buildOtherShip(0x667788);
+otherShip1.position.set(1.5, 1.2, SHIP_BASE_Z - 25);
+scene.add(otherShip1);
+
+const otherShip2 = buildOtherShip(0x556677);
+otherShip2.position.set(-1, 1.0, SHIP_BASE_Z - 45);
+scene.add(otherShip2);
+
+// Exhaust trails for other ships
+function createOtherExhaust(count) {
+    const positions = new Float32Array(count * 3);
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    const mat = new THREE.PointsMaterial({
+        size: 0.04,
+        color: 0x00ccff,
+        transparent: true,
+        opacity: 0.6,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false
+    });
+    return { points: new THREE.Points(geo, mat), velocities: [] };
+}
+
+const otherExhaust1 = createOtherExhaust(60);
+scene.add(otherExhaust1.points);
+const otherExhaust2 = createOtherExhaust(60);
+scene.add(otherExhaust2.points);
+
+function initOtherExhaust(exhaust, ship, count) {
+    const pos = exhaust.points.geometry.attributes.position;
+    exhaust.velocities = [];
+    for (let i = 0; i < count; i++) {
+        pos.array[i * 3] = ship.position.x + (Math.random() - 0.5) * 0.1;
+        pos.array[i * 3 + 1] = ship.position.y + (Math.random() - 0.5) * 0.05;
+        pos.array[i * 3 + 2] = ship.position.z + 0.7 + Math.random() * 2;
+        exhaust.velocities.push({ life: Math.random(), speed: 1 + Math.random() * 2 });
+    }
+    pos.needsUpdate = true;
+}
+
+initOtherExhaust(otherExhaust1, otherShip1, 60);
+initOtherExhaust(otherExhaust2, otherShip2, 60);
+
+// --- Red tracer bolts from pursuer ---
+const TRACER_COUNT = 8;
+const tracers = [];
+const tracerMat = new THREE.MeshStandardMaterial({
+    color: 0xff2200,
+    emissive: 0xff2200,
+    emissiveIntensity: 4.0,
+    roughness: 0.0,
+    metalness: 0.0
+});
+
+for (let i = 0; i < TRACER_COUNT; i++) {
+    const tracer = new THREE.Mesh(
+        new THREE.BoxGeometry(0.04, 0.04, 0.8),
+        tracerMat
+    );
+    tracer.visible = false;
+    scene.add(tracer);
+
+    // Tracer light
+    const tLight = new THREE.PointLight(0xff2200, 0.5, 3, 2);
+    tracer.add(tLight);
+
+    tracers.push({
+        mesh: tracer,
+        active: false,
+        x: 0, y: 0, z: 0,
+        speed: 45 + Math.random() * 10,
+        timer: Math.random() * 3
+    });
+}
+
+// --- Spark particles ---
+const SPARK_COUNT = 80;
+const sparkPositions = new Float32Array(SPARK_COUNT * 3);
+const sparkGeo = new THREE.BufferGeometry();
+sparkGeo.setAttribute('position', new THREE.BufferAttribute(sparkPositions, 3));
+const sparkMat = new THREE.PointsMaterial({
+    size: 0.05,
+    color: 0xff8833,
+    transparent: true,
+    opacity: 0.9,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false
+});
+const sparks = new THREE.Points(sparkGeo, sparkMat);
+scene.add(sparks);
+
+const sparkData = [];
+for (let i = 0; i < SPARK_COUNT; i++) {
+    sparkData.push({
+        active: false,
+        vx: 0, vy: 0, vz: 0,
+        life: 0, maxLife: 0
+    });
+    sparkPositions[i * 3] = 0;
+    sparkPositions[i * 3 + 1] = -100;
+    sparkPositions[i * 3 + 2] = 0;
+}
+
+// --- Dust particles ---
+const DUST_COUNT = 120;
+const dustPositions = new Float32Array(DUST_COUNT * 3);
+for (let i = 0; i < DUST_COUNT; i++) {
+    dustPositions[i * 3] = (Math.random() - 0.5) * 8;
+    dustPositions[i * 3 + 1] = Math.random() * 5 + 0.3;
+    dustPositions[i * 3 + 2] = -Math.random() * 60;
+}
+const dustGeo = new THREE.BufferGeometry();
+dustGeo.setAttribute('position', new THREE.BufferAttribute(dustPositions, 3));
+const dustMat = new THREE.PointsMaterial({
+    size: 0.02,
+    color: 0x667788,
+    transparent: true,
+    opacity: 0.3,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false
+});
+const dust = new THREE.Points(dustGeo, dustMat);
+scene.add(dust);
+
+// --- Lighting ---
+const ambientLight = new THREE.AmbientLight(0x111122, 0.3);
+scene.add(ambientLight);
+
+const dirLight = new THREE.DirectionalLight(0x8888aa, 0.6);
+dirLight.position.set(2, 10, -5);
+dirLight.castShadow = true;
+dirLight.shadow.mapSize.set(1024, 1024);
+dirLight.shadow.camera.near = 1;
+dirLight.shadow.camera.far = 50;
+dirLight.shadow.camera.left = -10;
+dirLight.shadow.camera.right = 10;
+dirLight.shadow.camera.top = 10;
+dirLight.shadow.camera.bottom = -10;
+scene.add(dirLight);
+
+// Small fill from below for drama
+const fillLight = new THREE.DirectionalLight(0x112244, 0.2);
+fillLight.position.set(0, -2, -3);
+scene.add(fillLight);
+
+// --- Near-miss flash overlay ---
+const flashGeo = new THREE.PlaneGeometry(20, 20);
+const flashMat = new THREE.MeshBasicMaterial({
+    color: 0x00ffff,
+    transparent: true,
+    opacity: 0,
+    side: THREE.DoubleSide,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+    depthTest: false
+});
+const flash = new THREE.Mesh(flashGeo, flashMat);
+flash.renderOrder = 999;
+scene.add(flash);
+
+// --- State ---
+let canyonOffset = 0;
+let shipX = 0;
+let shipTargetX = 0;
+let cameraX = 0;
+let frameCount = 0;
+let lastTime = performance.now();
+let fpsDisplay = 0;
+let speedValue = 1247;
+let speedTimer = 0;
+let distanceKm = 12.4;
+let flashOpacity = 0;
+
+// Ship weave pattern: complex path
+function getShipX(t) {
+    return Math.sin(t * 0.7) * 2.5 + Math.sin(t * 1.3) * 0.8 + Math.sin(t * 0.3) * 1.0;
+}
+
+// Other ship paths
+function getOtherShip1X(t) {
+    return Math.sin(t * 0.5 + 1.0) * 2.0 + Math.cos(t * 0.9) * 0.6;
+}
+function getOtherShip2X(t) {
+    return Math.sin(t * 0.4 + 2.5) * 1.8 + Math.sin(t * 1.1 + 1.0) * 0.7;
+}
+
+// --- HUD elements ---
+const statsEl = document.getElementById('stats');
+const speedEl = document.getElementById('speed');
+const hudEl = document.getElementById('hud');
+const warningEl = document.getElementById('warning');
+
+// --- Resize ---
+window.addEventListener('resize', () => {
+    aspect = window.innerWidth / window.innerHeight;
+    camera.aspect = aspect;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+// --- Animation ---
+const clock = new THREE.Clock();
+
+function animate() {
+    requestAnimationFrame(animate);
+    const delta = Math.min(clock.getDelta(), 0.05);
+    const elapsed = clock.getElapsedTime();
+
+    // --- Move canyon (scroll effect) ---
+    canyonOffset += SPEED * delta;
+    if (canyonOffset > CANYON_LENGTH) canyonOffset -= CANYON_LENGTH;
+    canyonGroup.position.z = canyonOffset;
+
+    // --- Ship weaving ---
+    shipTargetX = getShipX(elapsed);
+    shipX += (shipTargetX - shipX) * 5 * delta;
+
+    const shipDx = getShipX(elapsed + 0.01) - getShipX(elapsed - 0.01);
+    const bankAngle = -shipDx * 0.25;
+    const pitchAngle = -Math.abs(shipDx) * 0.03;
+
+    shipGroup.position.x = shipX;
+    shipGroup.position.y = 1 + Math.sin(elapsed * 2) * 0.05;
+    shipGroup.rotation.z = bankAngle;
+    shipGroup.rotation.x = pitchAngle;
+
+    // --- Camera follows with lag ---
+    cameraX += (shipX * 0.7 - cameraX) * 3 * delta;
+    camera.position.set(cameraX, 2 + Math.sin(elapsed * 1.5) * 0.03, 0);
+    camera.lookAt(shipX * 0.4, 1.2, SHIP_BASE_Z - 5);
+    camera.rotation.z = bankAngle * 0.15; // slight camera roll
+
+    // Dynamic FOV based on speed feel
+    camera.fov = 75 + Math.sin(elapsed * 0.5) * 2;
+    camera.updateProjectionMatrix();
+
+    // --- Update directional light to follow ---
+    dirLight.position.set(cameraX + 2, 10, canyonOffset - 5);
+    dirLight.target.position.set(cameraX, 0, SHIP_BASE_Z);
+
+    // --- Exhaust particles ---
+    const ePos = exhaustGeo.attributes.position;
+    for (let i = 0; i < EXHAUST_COUNT; i++) {
+        const v = exhaustVelocities[i];
+        v.life += delta * (2 + Math.random());
+        if (v.life > 1) {
+            v.life = 0;
+            const side = i % 2 === 0 ? -0.3 : 0.3;
+            ePos.array[i * 3] = shipX + side + (Math.random() - 0.5) * 0.06;
+            ePos.array[i * 3 + 1] = shipGroup.position.y + (Math.random() - 0.5) * 0.04;
+            ePos.array[i * 3 + 2] = SHIP_BASE_Z + 0.85;
+            v.z = 2 + Math.random() * 5;
+            v.x = (Math.random() - 0.5) * 0.3;
+            v.y = (Math.random() - 0.5) * 0.15;
+        }
+        ePos.array[i * 3] += v.x * delta;
+        ePos.array[i * 3 + 1] += v.y * delta;
+        ePos.array[i * 3 + 2] += v.z * delta;
+
+        // Fade color
+        const fade = 1 - v.life;
+        exhaustGeo.attributes.color.array[i * 3] = 0;
+        exhaustGeo.attributes.color.array[i * 3 + 1] = fade * 0.9;
+        exhaustGeo.attributes.color.array[i * 3 + 2] = fade;
+    }
+    ePos.needsUpdate = true;
+    exhaustGeo.attributes.color.needsUpdate = true;
+
+    // --- Speed lines ---
+    const slPos = speedLineGeo.attributes.position;
+    for (let i = 0; i < SPEED_LINE_COUNT; i++) {
+        const d = speedLineData[i];
+        d.z += d.speed * delta;
+        if (d.z > 10) {
+            d.z = -60 - Math.random() * 30;
+            d.x = (Math.random() - 0.5) * 10;
+            d.y = Math.random() * 6 + 0.5;
+        }
+        const idx = i * 6;
+        slPos.array[idx] = d.x + cameraX * 0.3;
+        slPos.array[idx + 1] = d.y;
+        slPos.array[idx + 2] = d.z;
+        slPos.array[idx + 3] = d.x + cameraX * 0.3;
+        slPos.array[idx + 4] = d.y;
+        slPos.array[idx + 5] = d.z + d.len;
+    }
+    slPos.needsUpdate = true;
+
+    // --- Other ships ---
+    const otherShip1X = getOtherShip1X(elapsed);
+    otherShip1.position.x = otherShip1X;
+    otherShip1.position.y = 1.2 + Math.sin(elapsed * 1.8) * 0.06;
+    const os1Dx = getOtherShip1X(elapsed + 0.01) - getOtherShip1X(elapsed - 0.01);
+    otherShip1.rotation.z = -os1Dx * 0.2;
+
+    const otherShip2X = getOtherShip2X(elapsed);
+    otherShip2.position.x = otherShip2X;
+    otherShip2.position.y = 1.0 + Math.sin(elapsed * 2.1 + 1) * 0.05;
+    const os2Dx = getOtherShip2X(elapsed + 0.01) - getOtherShip2X(elapsed - 0.01);
+    otherShip2.rotation.z = -os2Dx * 0.2;
+
+    // Ship 1 gradually getting closer (player gaining)
+    const ship1RelZ = SHIP_BASE_Z - 25 + Math.sin(elapsed * 0.15) * 5;
+    otherShip1.position.z = ship1RelZ;
+    otherShip2.position.z = SHIP_BASE_Z - 45 + Math.sin(elapsed * 0.1 + 2) * 3;
+
+    // Update other exhaust trails
+    updateOtherExhaust(otherExhaust1, otherShip1, 60, delta);
+    updateOtherExhaust(otherExhaust2, otherShip2, 60, delta);
+
+    // --- Red tracers from pursuer ---
+    for (let t = 0; t < TRACER_COUNT; t++) {
+        const tr = tracers[t];
+        tr.timer -= delta;
+        if (!tr.active && tr.timer <= 0) {
+            tr.active = true;
+            tr.x = shipX + (Math.random() - 0.5) * 3;
+            tr.y = 1 + (Math.random() - 0.5) * 1.5;
+            tr.z = 20;
+            tr.speed = 45 + Math.random() * 15;
+            tr.mesh.visible = true;
+            tr.timer = 0.3 + Math.random() * 1.5;
+        }
+        if (tr.active) {
+            tr.z -= tr.speed * delta;
+            tr.mesh.position.set(tr.x, tr.y, tr.z);
+            if (tr.z < SHIP_BASE_Z - 50) {
+                tr.active = false;
+                tr.mesh.visible = false;
+                tr.timer = 0.3 + Math.random() * 1.5;
+            }
+        }
+    }
+
+    // --- Sparks near walls ---
+    updateSparks(delta, elapsed);
+
+    // --- Dust ---
+    const dPos = dustGeo.attributes.position;
+    for (let i = 0; i < DUST_COUNT; i++) {
+        dPos.array[i * 3 + 2] += 15 * delta;
+        if (dPos.array[i * 3 + 2] > 5) {
+            dPos.array[i * 3] = (Math.random() - 0.5) * 8 + cameraX;
+            dPos.array[i * 3 + 1] = Math.random() * 5 + 0.3;
+            dPos.array[i * 3 + 2] = -55 - Math.random() * 10;
+        }
+    }
+    dPos.needsUpdate = true;
+
+    // --- Near-miss flash ---
+    if (flashOpacity > 0) {
+        flashOpacity -= delta * 4;
+        if (flashOpacity < 0) flashOpacity = 0;
+    }
+    flashMat.opacity = flashOpacity;
+    flash.position.copy(camera.position);
+    flash.position.z -= 1;
+    flash.lookAt(camera.position);
+
+    // Check obstacle proximity for flash
+    obstacles.forEach(obs => {
+        const obsWorldZ = obs.z + canyonOffset;
+        const relZ = obsWorldZ;
+        if (relZ > SHIP_BASE_Z - 1 && relZ < SHIP_BASE_Z + 1) {
+            flashOpacity = 0.15;
+            warningEl.style.opacity = '1';
+        }
+    });
+    if (flashOpacity < 0.02) warningEl.style.opacity = '0';
+
+    // --- Engine glow pulse ---
+    const glowPulse = 2.5 + Math.sin(elapsed * 15) * 0.5;
+    engineGlowMat.emissiveIntensity = glowPulse;
+
+    // --- FPS ---
+    frameCount++;
+    const now = performance.now();
+    if (now - lastTime >= 500) {
+        fpsDisplay = Math.round(frameCount / ((now - lastTime) / 1000));
+        frameCount = 0;
+        lastTime = now;
+        statsEl.textContent = fpsDisplay + ' FPS';
+    }
+
+    // --- Speed counter ---
+    speedTimer += delta;
+    if (speedTimer > 0.2) {
+        speedTimer = 0;
+        speedValue += Math.floor(Math.random() * 3);
+        if (speedValue > 9999) speedValue = 1247;
+        speedEl.innerHTML = speedValue + ' <span style="font-size:11px">MKS</span>';
+    }
+
+    // --- Distance ---
+    distanceKm += delta * 0.8;
+    hudEl.innerHTML = 'TRENCH RUN &middot; SECTOR 7 &middot; DISTANCE: ' + distanceKm.toFixed(1) + ' KM<br>WARNING: PURSUIT DETECTED';
+
+    // --- Render ---
+    renderer.render(scene, camera);
+}
+
+function updateOtherExhaust(exhaust, ship, count, delta) {
+    const pos = exhaust.points.geometry.attributes.position;
+    for (let i = 0; i < count; i++) {
+        if (!exhaust.velocities[i]) {
+            exhaust.velocities[i] = { life: Math.random(), speed: 1 + Math.random() * 2 };
+        }
+        const v = exhaust.velocities[i];
+        v.life += delta * 2;
+        if (v.life > 1) {
+            v.life = 0;
+            pos.array[i * 3] = ship.position.x + (Math.random() - 0.5) * 0.08;
+            pos.array[i * 3 + 1] = ship.position.y + (Math.random() - 0.5) * 0.04;
+            pos.array[i * 3 + 2] = ship.position.z + 0.65;
+            v.speed = 1 + Math.random() * 3;
+        }
+        pos.array[i * 3 + 2] += v.speed * delta;
+        pos.array[i * 3] += (Math.random() - 0.5) * 0.02;
+    }
+    pos.needsUpdate = true;
+}
+
+let nextSparkIdx = 0;
+function spawnSpark(x, y, z) {
+    const s = sparkData[nextSparkIdx];
+    s.active = true;
+    s.vx = (Math.random() - 0.5) * 3;
+    s.vy = Math.random() * 2 + 1;
+    s.vz = (Math.random() - 0.5) * 2;
+    s.life = 0;
+    s.maxLife = 0.3 + Math.random() * 0.4;
+    sparkPositions[nextSparkIdx * 3] = x;
+    sparkPositions[nextSparkIdx * 3 + 1] = y;
+    sparkPositions[nextSparkIdx * 3 + 2] = z;
+    nextSparkIdx = (nextSparkIdx + 1) % SPARK_COUNT;
+}
+
+function updateSparks(delta, elapsed) {
+    // Spawn sparks when ship is near walls
+    const wallProx = Math.abs(shipX) > 2.5;
+    if (wallProx && Math.random() < 0.3) {
+        const side = shipX > 0 ? WALL_X - 1 : -WALL_X + 1;
+        spawnSpark(
+            side + (Math.random() - 0.5) * 0.3,
+            0.8 + Math.random() * 0.5,
+            SHIP_BASE_Z + 0.5 + Math.random() * 0.5
+        );
+    }
+
+    for (let i = 0; i < SPARK_COUNT; i++) {
+        const s = sparkData[i];
+        if (!s.active) continue;
+        s.life += delta;
+        if (s.life > s.maxLife) {
+            s.active = false;
+            sparkPositions[i * 3 + 1] = -100;
+        } else {
+            sparkPositions[i * 3] += s.vx * delta;
+            sparkPositions[i * 3 + 1] += s.vy * delta - 4 * delta * s.life;
+            sparkPositions[i * 3 + 2] += s.vz * delta;
+        }
+    }
+    sparkGeo.attributes.position.needsUpdate = true;
+}
+
+animate();
+</script>
+</body>
+</html>

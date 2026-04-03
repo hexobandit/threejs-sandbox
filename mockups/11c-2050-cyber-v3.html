@@ -1,0 +1,1180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0,user-scalable=no">
+<title>11c / 2050 CYBER v3</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{overflow:hidden;background:#000008;touch-action:none;-webkit-user-select:none;user-select:none}
+canvas{display:block}
+#ui{position:fixed;top:0;left:0;padding:12px;font-family:'Courier New',monospace;color:#fff;pointer-events:none;z-index:10}
+#ui h1{font-size:14px;color:#00ffff;margin-bottom:4px;text-shadow:0 0 10px #00ffff88,0 0 20px #00ffff44}
+#ui p{font-size:11px;color:#888;line-height:1.4;max-width:320px}
+#stats{font-size:11px;color:#ff00ff;margin-top:8px;text-shadow:0 0 6px #ff00ff44}
+#back{position:fixed;top:12px;right:12px;font-family:'Courier New',monospace;font-size:12px;color:#00ffff;text-decoration:none;z-index:10;text-shadow:0 0 8px #00ffff66}
+#back:hover{color:#88ffff}
+#terminal{position:fixed;bottom:0;left:0;right:0;padding:8px 12px;font-family:'Courier New',monospace;font-size:11px;color:#00ffff;background:rgba(0,10,20,0.9);border-top:1px solid #00ffff44;z-index:10;pointer-events:none;text-shadow:0 0 6px #00ffff44;white-space:nowrap;overflow:hidden}
+#terminal .cursor{display:inline-block;width:6px;height:11px;background:#00ffff;animation:blink 1s step-end infinite;vertical-align:middle;margin-left:4px}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:0}}
+</style>
+</head>
+<body>
+<div id="ui">
+    <h1>11c / 2050 CYBER v3</h1>
+    <p>Full spectrum warfare &middot; Ground &middot; Air &middot; Orbital &middot; All layers active</p>
+    <div id="stats">-- FPS</div>
+</div>
+<a id="back" href="../index.html">&larr; back</a>
+<div id="altitude" style="position:fixed;right:12px;top:50%;transform:translateY(-50%);font-family:'Courier New',monospace;font-size:9px;color:#ffffff44;z-index:10;pointer-events:none;text-align:right;line-height:2.5">
+    ORB &mdash; 16<br>
+    &middot;&middot;&middot;<br>
+    CAR &mdash; 8<br>
+    &middot;&middot;&middot;<br>
+    AIR &mdash; 3<br>
+    &middot;&middot;&middot;<br>
+    GND &mdash; 0
+</div>
+<div id="terminal">
+    CYBERFRONT v3 // ALL LAYERS ENGAGED // DREADNOUGHT FIRING // ORBITAL STRIKE x3 // WARP SIGNATURE DETECTED // SHIELD INTEGRITY 42%<span class="cursor"></span>
+</div>
+<script type="importmap">
+{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"}}
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+/* ====================================================================
+   CONSTANTS & HELPERS
+   ==================================================================== */
+const CYAN    = 0x00ffff;
+const MAGENTA = 0xff00ff;
+const WHITE   = 0xffffff;
+const GOLD    = 0xffdd44;
+const PI  = Math.PI;
+const TAU = PI * 2;
+
+function hexToWorld(q, r) {
+    const size = 1;
+    const x = size * (Math.sqrt(3) * q + Math.sqrt(3) / 2 * r);
+    const z = size * (1.5 * r);
+    return new THREE.Vector3(x, 0, z);
+}
+
+function wireframeMesh(geo, color, opacity = 1.0) {
+    const edges = new THREE.EdgesGeometry(geo);
+    const mat = new THREE.LineBasicMaterial({ color, transparent: true, opacity });
+    return new THREE.LineSegments(edges, mat);
+}
+
+function simpleLineMat(color, opacity = 1.0) {
+    return new THREE.LineBasicMaterial({ color, transparent: true, opacity });
+}
+
+/* ====================================================================
+   RENDERER
+   ==================================================================== */
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setClearColor(0x000008);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.2;
+document.body.appendChild(renderer.domElement);
+
+/* ====================================================================
+   SCENE
+   ==================================================================== */
+const scene = new THREE.Scene();
+
+/* ====================================================================
+   ORTHOGRAPHIC CAMERA
+   ==================================================================== */
+const frustum = 45;
+let aspect = window.innerWidth / window.innerHeight;
+const camera = new THREE.OrthographicCamera(
+    frustum * aspect / -2, frustum * aspect / 2,
+    frustum / 2, frustum / -2, 0.1, 500
+);
+camera.position.set(25, 45, 25);
+camera.lookAt(0, 6, 0);
+
+/* ====================================================================
+   CONTROLS
+   ==================================================================== */
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.target.set(0, 6, 0);
+controls.autoRotate = true;
+controls.autoRotateSpeed = 0.15;
+controls.maxPolarAngle = PI / 2.2;
+controls.minZoom = 0.3;
+controls.maxZoom = 3;
+controls.addEventListener('start', () => { controls.autoRotate = false; });
+
+/* ====================================================================
+   LIGHTING (minimal)
+   ==================================================================== */
+scene.add(new THREE.AmbientLight(0x222244, 0.5));
+
+/* ====================================================================
+   GROUND LAYER — HEX GRID (y=0)
+   ==================================================================== */
+const hexGroup = new THREE.Group();
+scene.add(hexGroup);
+
+function createHexEdges(center, color, opacity) {
+    const pts = [];
+    for (let i = 0; i <= 6; i++) {
+        const angle = (PI / 3) * i + PI / 6; // flat-top
+        pts.push(new THREE.Vector3(
+            center.x + Math.cos(angle),
+            0,
+            center.z + Math.sin(angle)
+        ));
+    }
+    const geo = new THREE.BufferGeometry().setFromPoints(pts);
+    const line = new THREE.Line(geo, simpleLineMat(color, opacity));
+    return line;
+}
+
+const contestedHexes = [];
+const playerHexCoords = [];
+const enemyHexCoords = [];
+
+const gridRadius = 10;
+for (let q = -gridRadius; q <= gridRadius; q++) {
+    for (let r = -gridRadius; r <= gridRadius; r++) {
+        const s = -q - r;
+        if (Math.abs(s) > gridRadius) continue;
+        const pos = hexToWorld(q, r);
+        if (pos.length() > gridRadius * 1.6) continue;
+
+        let color, opacity;
+        if (r > 2) {
+            // enemy territory (north = positive r)
+            color = MAGENTA;
+            opacity = 0.4;
+            enemyHexCoords.push({ q, r, pos: pos.clone() });
+        } else if (r < -2) {
+            // player territory (south = negative r)
+            color = CYAN;
+            opacity = 0.4;
+            playerHexCoords.push({ q, r, pos: pos.clone() });
+        } else {
+            // contested
+            color = WHITE;
+            opacity = 0.25;
+            contestedHexes.push(null); // placeholder — we store the line next
+        }
+        const hex = createHexEdges(pos, color, opacity);
+        hexGroup.add(hex);
+        if (r >= -2 && r <= 2) {
+            contestedHexes[contestedHexes.length - 1] = hex;
+        }
+    }
+}
+
+/* ====================================================================
+   GROUND UNITS — FORTRESS NODES (player side)
+   ==================================================================== */
+const fortressNodes = [];
+const fortressPositions = [
+    hexToWorld(-2, -5),
+    hexToWorld(0, -6),
+    hexToWorld(2, -5)
+];
+fortressPositions.forEach(pos => {
+    const ico = wireframeMesh(new THREE.IcosahedronGeometry(0.6, 0), CYAN, 0.9);
+    ico.position.copy(pos);
+    ico.position.y = 0.6;
+    scene.add(ico);
+
+    // Shield dome
+    const shield = wireframeMesh(new THREE.SphereGeometry(1.5, 16, 8, 0, TAU, 0, PI / 2), CYAN, 0.08);
+    shield.position.copy(pos);
+    shield.position.y = 0;
+    scene.add(shield);
+
+    fortressNodes.push({ mesh: ico, shield, pos: pos.clone() });
+});
+
+/* ====================================================================
+   GROUND UNITS — CORRUPTION HUBS (enemy side)
+   ==================================================================== */
+const corruptionHubs = [];
+const hubPositions = [
+    hexToWorld(-1, 5),
+    hexToWorld(1, 6)
+];
+hubPositions.forEach(pos => {
+    const dodec = wireframeMesh(new THREE.DodecahedronGeometry(0.6, 0), MAGENTA, 0.9);
+    dodec.position.copy(pos);
+    dodec.position.y = 0.6;
+    scene.add(dodec);
+    corruptionHubs.push({ mesh: dodec });
+});
+
+/* ====================================================================
+   GROUND SWARM BATTLE
+   ==================================================================== */
+const groundSwarm = { cyan: [], magenta: [], lines: [] };
+
+for (let i = 0; i < 8; i++) {
+    const cube = wireframeMesh(new THREE.BoxGeometry(0.15, 0.15, 0.15), CYAN, 0.8);
+    const angle = (i / 8) * TAU;
+    cube.position.set(Math.cos(angle) * 2 - 1, 0.1, Math.sin(angle) * 0.8);
+    scene.add(cube);
+    groundSwarm.cyan.push(cube);
+}
+for (let i = 0; i < 8; i++) {
+    const cube = wireframeMesh(new THREE.BoxGeometry(0.15, 0.15, 0.15), MAGENTA, 0.8);
+    const angle = (i / 8) * TAU;
+    cube.position.set(Math.cos(angle) * 2 + 1, 0.1, Math.sin(angle) * 0.8);
+    scene.add(cube);
+    groundSwarm.magenta.push(cube);
+}
+
+// Attack lines between ground swarm
+for (let i = 0; i < 6; i++) {
+    const geo = new THREE.BufferGeometry().setFromPoints([
+        new THREE.Vector3(0, 0, 0),
+        new THREE.Vector3(1, 0, 0)
+    ]);
+    const line = new THREE.Line(geo, simpleLineMat(WHITE, 0.0));
+    scene.add(line);
+    groundSwarm.lines.push(line);
+}
+
+/* ====================================================================
+   LOW AIR — PLAYER INTERCEPTOR WING (8 drones, delta formation)
+   ==================================================================== */
+const TRAIL_LENGTH = 30;
+
+function createDrone(geo, color) {
+    const mesh = wireframeMesh(geo, color, 0.9);
+
+    // Contrail
+    const trailPts = [];
+    for (let i = 0; i < TRAIL_LENGTH; i++) trailPts.push(new THREE.Vector3());
+    const trailGeo = new THREE.BufferGeometry().setFromPoints(trailPts);
+    const trailMat = simpleLineMat(color, 0.4);
+    const trail = new THREE.Line(trailGeo, trailMat);
+    scene.add(trail);
+
+    return { mesh, trail, trailGeo, positions: trailPts.map(() => new THREE.Vector3()) };
+}
+
+const playerDrones = [];
+const deltaOffsets = [
+    [0, 0], [-1, -0.6], [1, -0.6], [-2, -1.2], [2, -1.2],
+    [-3, -1.8], [3, -1.8], [0, -1.2]
+];
+for (let i = 0; i < 8; i++) {
+    const drone = createDrone(new THREE.OctahedronGeometry(0.2, 0), CYAN);
+    scene.add(drone.mesh);
+    drone.formationOffset = new THREE.Vector2(deltaOffsets[i][0] * 0.8, deltaOffsets[i][1] * 0.8);
+    playerDrones.push(drone);
+}
+
+/* ====================================================================
+   LOW AIR — ENEMY ASSAULT WING (10 drones, spread formation)
+   ==================================================================== */
+const enemyDrones = [];
+const spreadOffsets = [
+    [0, 0], [-1.2, 0.4], [1.2, 0.4], [-2.4, 0.8], [2.4, 0.8],
+    [-0.6, 0.8], [0.6, 0.8], [-1.8, 1.2], [1.8, 1.2], [0, 1.2]
+];
+for (let i = 0; i < 10; i++) {
+    const drone = createDrone(new THREE.TetrahedronGeometry(0.2, 0), MAGENTA);
+    scene.add(drone.mesh);
+    drone.formationOffset = new THREE.Vector2(spreadOffsets[i][0] * 0.7, spreadOffsets[i][1] * 0.7);
+    enemyDrones.push(drone);
+}
+
+/* ====================================================================
+   DOGFIGHT CLUSTER — 3v3 at y=3
+   ==================================================================== */
+const dogfightDrones = [];
+for (let i = 0; i < 6; i++) {
+    const isCyan = i < 3;
+    const drone = createDrone(
+        isCyan ? new THREE.OctahedronGeometry(0.15, 0) : new THREE.TetrahedronGeometry(0.15, 0),
+        isCyan ? CYAN : MAGENTA
+    );
+    scene.add(drone.mesh);
+    drone.orbitAngle = (i / 6) * TAU;
+    drone.orbitRadius = 1.2 + (i % 2) * 0.4;
+    drone.team = isCyan ? 'cyan' : 'magenta';
+    dogfightDrones.push(drone);
+}
+
+// Dogfight tracers
+const dogfightTracers = [];
+for (let i = 0; i < 4; i++) {
+    const geo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]);
+    const line = new THREE.Line(geo, simpleLineMat(WHITE, 0.0));
+    scene.add(line);
+    dogfightTracers.push({ line, timer: Math.random() * 2 });
+}
+
+// Destroyed drones (2 tumbling fragments)
+const destroyedDrones = [];
+for (let i = 0; i < 2; i++) {
+    const frag = wireframeMesh(new THREE.TetrahedronGeometry(0.1, 0), i === 0 ? CYAN : MAGENTA, 0.6);
+    frag.position.set(5 + i * 0.5, 3, -1);
+    scene.add(frag);
+    destroyedDrones.push({ mesh: frag, vy: 0, baseY: 3, resetTimer: 0 });
+}
+
+// Explosion bursts (small particle points)
+const explosionParticles = [];
+for (let i = 0; i < 2; i++) {
+    const count = 8;
+    const positions = new Float32Array(count * 3);
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    const mat = new THREE.PointsMaterial({ color: WHITE, size: 0.08, transparent: true, opacity: 0 });
+    const pts = new THREE.Points(geo, mat);
+    scene.add(pts);
+    const velocities = [];
+    for (let j = 0; j < count; j++) {
+        velocities.push(new THREE.Vector3(
+            (Math.random() - 0.5) * 0.1,
+            (Math.random() - 0.5) * 0.1,
+            (Math.random() - 0.5) * 0.1
+        ));
+    }
+    explosionParticles.push({ pts, geo, mat, velocities, timer: 0, active: false, origin: new THREE.Vector3(5 + i, 3, -1) });
+}
+
+/* ====================================================================
+   CARRIER LAYER — PLAYER COMMAND CARRIER (y=8)
+   ==================================================================== */
+const playerCarrier = new THREE.Group();
+playerCarrier.position.set(-5, 8, -3);
+scene.add(playerCarrier);
+
+// Main hull
+playerCarrier.add(wireframeMesh(new THREE.BoxGeometry(4, 0.6, 2), CYAN, 0.7));
+// Bridge
+const bridge = wireframeMesh(new THREE.BoxGeometry(1, 0.6, 0.8), CYAN, 0.7);
+bridge.position.set(-0.5, 0.6, 0);
+playerCarrier.add(bridge);
+// Engine nacelles
+const nacL = wireframeMesh(new THREE.BoxGeometry(0.4, 0.4, 1.5), CYAN, 0.7);
+nacL.position.set(1.5, -0.1, 1.2);
+playerCarrier.add(nacL);
+const nacR = wireframeMesh(new THREE.BoxGeometry(0.4, 0.4, 1.5), CYAN, 0.7);
+nacR.position.set(1.5, -0.1, -1.2);
+playerCarrier.add(nacR);
+// Ventral hangar bay
+const hangar = wireframeMesh(new THREE.BoxGeometry(2, 0.2, 1), CYAN, 0.5);
+hangar.position.set(0.3, -0.4, 0);
+playerCarrier.add(hangar);
+
+// Engine exhaust particles (2 nacelles, 30 particles each)
+const carrierExhausts = [];
+function createExhaust(parent, localPos, color, count) {
+    const positions = new Float32Array(count * 3);
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    const mat = new THREE.PointsMaterial({ color, size: 0.06, transparent: true, opacity: 0.6 });
+    const pts = new THREE.Points(geo, mat);
+    scene.add(pts);
+    const particles = [];
+    for (let i = 0; i < count; i++) {
+        particles.push({
+            pos: new THREE.Vector3(),
+            vel: new THREE.Vector3((Math.random() - 0.5) * 0.01, 0, 0.02 + Math.random() * 0.02),
+            life: Math.random()
+        });
+    }
+    return { pts, geo, mat, particles, parent, localPos: localPos.clone(), color };
+}
+carrierExhausts.push(createExhaust(playerCarrier, new THREE.Vector3(1.5, -0.1, 1.95), CYAN, 30));
+carrierExhausts.push(createExhaust(playerCarrier, new THREE.Vector3(1.5, -0.1, -1.95), CYAN, 30));
+
+// Launch bay flash
+const launchFlash = new THREE.Mesh(
+    new THREE.SphereGeometry(0.3, 8, 4),
+    new THREE.MeshBasicMaterial({ color: CYAN, transparent: true, opacity: 0 })
+);
+launchFlash.position.set(0.3, -0.4, 0);
+playerCarrier.add(launchFlash);
+let launchTimer = 0;
+
+// Drone tether lines (from carrier to player drone formation)
+const tetherLines = [];
+for (let i = 0; i < 8; i++) {
+    const geo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]);
+    const line = new THREE.Line(geo, simpleLineMat(CYAN, 0.06));
+    scene.add(line);
+    tetherLines.push(line);
+}
+
+// Shield bubble
+const carrierShield = wireframeMesh(
+    new THREE.SphereGeometry(3, 16, 8, 0, TAU, 0, PI / 2),
+    CYAN, 0.04
+);
+carrierShield.position.copy(playerCarrier.position);
+carrierShield.position.y -= 0.5;
+scene.add(carrierShield);
+
+// HP bar
+const hpBar = new THREE.Group();
+hpBar.position.set(-5, 10.5, -3);
+scene.add(hpBar);
+for (let i = 0; i < 3; i++) {
+    const cube = new THREE.Mesh(
+        new THREE.BoxGeometry(0.3, 0.3, 0.3),
+        new THREE.MeshBasicMaterial({ color: i < 2 ? CYAN : 0x333344, transparent: true, opacity: 0.6 })
+    );
+    cube.position.x = (i - 1) * 0.5;
+    hpBar.add(cube);
+}
+
+/* ====================================================================
+   CARRIER LAYER — ENEMY DREADNOUGHT (y=9)
+   ==================================================================== */
+const enemyDreadnought = new THREE.Group();
+enemyDreadnought.position.set(6, 9, 4);
+scene.add(enemyDreadnought);
+
+// Larger hull
+enemyDreadnought.add(wireframeMesh(new THREE.BoxGeometry(5, 0.8, 2.5), MAGENTA, 0.7));
+// Upper structure
+const upperStruct = wireframeMesh(new THREE.BoxGeometry(2, 0.5, 1.2), MAGENTA, 0.6);
+upperStruct.position.set(-0.5, 0.65, 0);
+enemyDreadnought.add(upperStruct);
+// Weapon pods
+for (let z of [-1.5, 1.5]) {
+    const pod = wireframeMesh(new THREE.BoxGeometry(1.2, 0.3, 0.5), MAGENTA, 0.7);
+    pod.position.set(2, -0.2, z);
+    enemyDreadnought.add(pod);
+}
+// Engine nacelles
+for (let z of [-1.6, 1.6]) {
+    const nac = wireframeMesh(new THREE.BoxGeometry(0.5, 0.5, 1.8), MAGENTA, 0.6);
+    nac.position.set(-2, -0.1, z);
+    enemyDreadnought.add(nac);
+}
+
+// Dreadnought engine exhaust
+carrierExhausts.push(createExhaust(enemyDreadnought, new THREE.Vector3(-2, -0.1, 2.5), MAGENTA, 30));
+carrierExhausts.push(createExhaust(enemyDreadnought, new THREE.Vector3(-2, -0.1, -2.5), MAGENTA, 30));
+
+/* ====================================================================
+   MAIN WEAPON BEAM (dreadnought → player carrier)
+   ==================================================================== */
+// Core beam line + 2 outer glow lines
+const beamLines = [];
+const beamOpacities = [0.7, 0.3, 0.3];
+for (let i = 0; i < 3; i++) {
+    const geo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]);
+    const mat = new THREE.LineBasicMaterial({ color: i === 0 ? MAGENTA : 0xff66ff, transparent: true, opacity: beamOpacities[i], linewidth: 1 });
+    const line = new THREE.Line(geo, mat);
+    scene.add(line);
+    beamLines.push({ line, geo, mat });
+}
+
+// Beam impact sparks
+const beamSparks = [];
+{
+    const count = 10;
+    const positions = new Float32Array(count * 3);
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    const mat = new THREE.PointsMaterial({ color: WHITE, size: 0.1, transparent: true, opacity: 0.8 });
+    const pts = new THREE.Points(geo, mat);
+    scene.add(pts);
+    const sparks = [];
+    for (let i = 0; i < count; i++) {
+        sparks.push({ pos: new THREE.Vector3(), vel: new THREE.Vector3(), life: Math.random() });
+    }
+    beamSparks.push({ pts, geo, mat, sparks });
+}
+
+/* ====================================================================
+   ORBITAL LAYER — DEFENSE PLATFORM (y=16)
+   ==================================================================== */
+const orbitalPlatform = new THREE.Group();
+orbitalPlatform.position.set(0, 16, 0);
+scene.add(orbitalPlatform);
+
+// Central ring
+const ring = wireframeMesh(new THREE.TorusGeometry(3, 0.05, 8, 32), 0x8888ff, 0.25);
+orbitalPlatform.add(ring);
+
+// 4 extending arms + node points
+for (let i = 0; i < 4; i++) {
+    const angle = (i / 4) * TAU;
+    const arm = wireframeMesh(new THREE.BoxGeometry(4, 0.04, 0.08), 0x8888ff, 0.2);
+    arm.position.set(Math.cos(angle) * 2, 0, Math.sin(angle) * 2);
+    arm.rotation.y = -angle;
+    orbitalPlatform.add(arm);
+
+    const node = wireframeMesh(new THREE.SphereGeometry(0.2, 8, 4), 0x8888ff, 0.3);
+    node.position.set(Math.cos(angle) * 4, 0, Math.sin(angle) * 4);
+    orbitalPlatform.add(node);
+}
+
+/* ====================================================================
+   ORBITAL STRIKE BEAMS (3 beams cycling on/off)
+   ==================================================================== */
+const orbitalBeams = [];
+const orbitalBeamTargets = [
+    { pos: hexToWorld(1, 4), color: CYAN },     // hits enemy hex
+    { pos: hexToWorld(-2, 5), color: CYAN },     // hits enemy hex
+    { pos: hexToWorld(0, -4), color: MAGENTA }   // hits player hex
+];
+
+orbitalBeamTargets.forEach((target, i) => {
+    // Beam line from orbital to ground
+    const geo = new THREE.BufferGeometry().setFromPoints([
+        new THREE.Vector3(0, 16, 0),
+        target.pos.clone()
+    ]);
+    const line = new THREE.Line(geo, simpleLineMat(target.color, 0.0));
+    scene.add(line);
+
+    // Impact ring on ground
+    const ringGeo = new THREE.TorusGeometry(0.5, 0.02, 4, 16);
+    const impactRing = wireframeMesh(ringGeo, target.color, 0.0);
+    impactRing.position.copy(target.pos);
+    impactRing.rotation.x = PI / 2;
+    scene.add(impactRing);
+
+    // Impact particles
+    const count = 15;
+    const positions = new Float32Array(count * 3);
+    const pGeo = new THREE.BufferGeometry();
+    pGeo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    const pMat = new THREE.PointsMaterial({ color: target.color, size: 0.06, transparent: true, opacity: 0 });
+    const pts = new THREE.Points(pGeo, pMat);
+    scene.add(pts);
+
+    const particles = [];
+    for (let j = 0; j < count; j++) {
+        particles.push({
+            pos: new THREE.Vector3(),
+            vel: new THREE.Vector3(),
+            life: 0
+        });
+    }
+
+    orbitalBeams.push({
+        line, impactRing, pts, pGeo, pMat, particles,
+        target: target.pos, color: target.color,
+        phase: i * 1.67, // stagger
+        active: false
+    });
+});
+
+/* ====================================================================
+   WARP PORTAL (y=15, off to one side)
+   ==================================================================== */
+const warpPortal = new THREE.Group();
+warpPortal.position.set(-8, 15, 6);
+scene.add(warpPortal);
+
+const warpRing = wireframeMesh(new THREE.TorusGeometry(1.5, 0.04, 8, 24), GOLD, 0.6);
+warpPortal.add(warpRing);
+
+// Warp particles streaming out (40 particles)
+const warpParticles = {
+    count: 40,
+    particles: [],
+    pts: null, geo: null, mat: null
+};
+{
+    const positions = new Float32Array(40 * 3);
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    const mat = new THREE.PointsMaterial({ color: GOLD, size: 0.08, transparent: true, opacity: 0.6 });
+    const pts = new THREE.Points(geo, mat);
+    scene.add(pts);
+    warpParticles.pts = pts;
+    warpParticles.geo = geo;
+    warpParticles.mat = mat;
+    for (let i = 0; i < 40; i++) {
+        const angle = Math.random() * TAU;
+        const r = 0.5 + Math.random() * 1.0;
+        warpParticles.particles.push({
+            pos: new THREE.Vector3(
+                -8 + Math.cos(angle) * r,
+                15 + (Math.random() - 0.5) * 0.5,
+                6 + Math.sin(angle) * r
+            ),
+            vel: new THREE.Vector3(
+                Math.cos(angle) * 0.03,
+                (Math.random() - 0.5) * 0.02,
+                Math.sin(angle) * 0.03
+            ),
+            life: Math.random()
+        });
+    }
+}
+
+/* ====================================================================
+   DATA LINK WEB (connecting ground → carrier → orbital)
+   ==================================================================== */
+const dataLinks = [];
+function addDataLink(from, to, color) {
+    const geo = new THREE.BufferGeometry().setFromPoints([from, to]);
+    const line = new THREE.Line(geo, simpleLineMat(color, 0.05));
+    scene.add(line);
+    dataLinks.push({ line, mat: line.material });
+}
+
+// Ground fortress → carrier
+fortressPositions.forEach(fp => {
+    addDataLink(fp.clone().setY(0.5), playerCarrier.position.clone(), CYAN);
+});
+// Carrier → orbital
+addDataLink(playerCarrier.position.clone().setY(8.5), orbitalPlatform.position.clone(), 0x8888ff);
+addDataLink(enemyDreadnought.position.clone().setY(9.5), orbitalPlatform.position.clone(), 0x8888ff);
+// Orbital → ground nodes
+fortressPositions.forEach(fp => {
+    addDataLink(orbitalPlatform.position.clone(), fp.clone().setY(0.5), 0x8888ff);
+});
+
+/* ====================================================================
+   ALTITUDE REFERENCE RINGS (y=5, 10, 15)
+   ==================================================================== */
+[5, 10, 15].forEach(y => {
+    const ringGeo = new THREE.TorusGeometry(12, 0.01, 4, 64);
+    const ring = wireframeMesh(ringGeo, WHITE, 0.04);
+    ring.position.y = y;
+    ring.rotation.x = PI / 2;
+    scene.add(ring);
+});
+
+/* ====================================================================
+   AMBIENT DATA MOTES (50 particles across all altitudes)
+   ==================================================================== */
+const ambientMotes = {
+    count: 50,
+    particles: [],
+    pts: null, geo: null, mat: null
+};
+{
+    const positions = new Float32Array(50 * 3);
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    const mat = new THREE.PointsMaterial({ color: 0x4488ff, size: 0.04, transparent: true, opacity: 0.3 });
+    const pts = new THREE.Points(geo, mat);
+    scene.add(pts);
+    ambientMotes.pts = pts;
+    ambientMotes.geo = geo;
+    ambientMotes.mat = mat;
+    for (let i = 0; i < 50; i++) {
+        ambientMotes.particles.push({
+            pos: new THREE.Vector3(
+                (Math.random() - 0.5) * 24,
+                Math.random() * 18,
+                (Math.random() - 0.5) * 24
+            ),
+            vel: new THREE.Vector3(
+                (Math.random() - 0.5) * 0.005,
+                (Math.random() - 0.5) * 0.003,
+                (Math.random() - 0.5) * 0.005
+            )
+        });
+    }
+}
+
+/* ====================================================================
+   DESTRUCTION DEBRIS (2 destroyed drone sites, 10 cubes each)
+   ==================================================================== */
+const debrisGroups = [];
+for (let d = 0; d < 2; d++) {
+    const debris = [];
+    for (let i = 0; i < 10; i++) {
+        const cube = wireframeMesh(new THREE.BoxGeometry(0.05, 0.05, 0.05), d === 0 ? CYAN : MAGENTA, 0.5);
+        cube.position.set(5 + d * 0.5, 3, -1);
+        scene.add(cube);
+        debris.push({
+            mesh: cube,
+            vel: new THREE.Vector3(
+                (Math.random() - 0.5) * 0.04,
+                -Math.random() * 0.02,
+                (Math.random() - 0.5) * 0.04
+            ),
+            life: Math.random()
+        });
+    }
+    debrisGroups.push(debris);
+}
+
+/* ====================================================================
+   ANIMATION LOOP
+   ==================================================================== */
+const clock = new THREE.Clock();
+let frameCount = 0;
+let fpsTime = 0;
+let elapsedTime = 0;
+const statsEl = document.getElementById('stats');
+const tmpVec = new THREE.Vector3();
+
+function animate() {
+    requestAnimationFrame(animate);
+    const dt = Math.min(clock.getDelta(), 0.05);
+    elapsedTime += dt;
+    const t = elapsedTime;
+
+    // FPS counter
+    frameCount++;
+    fpsTime += dt;
+    if (fpsTime >= 0.5) {
+        statsEl.textContent = Math.round(frameCount / fpsTime) + ' FPS';
+        frameCount = 0;
+        fpsTime = 0;
+    }
+
+    /* ── Contested hex pulsing ── */
+    const contestedOp = 0.15 + Math.sin(t * 2) * 0.1;
+    contestedHexes.forEach(hex => {
+        if (hex && hex.material) hex.material.opacity = contestedOp;
+    });
+
+    /* ── Fortress nodes rotation ── */
+    fortressNodes.forEach((fn, i) => {
+        fn.mesh.rotation.x = t * 0.5 + i;
+        fn.mesh.rotation.y = t * 0.3 + i;
+        fn.shield.material.opacity = 0.06 + Math.sin(t * 1.5 + i) * 0.03;
+    });
+
+    /* ── Corruption hubs pulsing ── */
+    corruptionHubs.forEach((ch, i) => {
+        ch.mesh.rotation.x = t * 0.4 + i;
+        ch.mesh.rotation.y = t * 0.6 + i;
+        const s = 1 + Math.sin(t * 2 + i) * 0.15;
+        ch.mesh.scale.setScalar(s);
+    });
+
+    /* ── Ground swarm battle ── */
+    groundSwarm.cyan.forEach((cube, i) => {
+        const a = t * 0.8 + (i / 8) * TAU;
+        cube.position.x = Math.cos(a) * (1.5 + Math.sin(t * 1.2 + i) * 0.5);
+        cube.position.z = Math.sin(a) * (1.0 + Math.cos(t * 0.9 + i) * 0.4);
+        cube.rotation.x = t * 2;
+        cube.rotation.y = t * 1.5;
+    });
+    groundSwarm.magenta.forEach((cube, i) => {
+        const a = -t * 0.7 + (i / 8) * TAU;
+        cube.position.x = Math.cos(a) * (1.5 + Math.sin(t * 1.1 + i) * 0.5);
+        cube.position.z = Math.sin(a) * (1.0 + Math.cos(t * 0.8 + i) * 0.4);
+        cube.rotation.x = t * 1.8;
+        cube.rotation.y = t * 2.2;
+    });
+    // Ground attack lines flickering
+    groundSwarm.lines.forEach((line, i) => {
+        const ci = i % 8;
+        const mi = (i + 3) % 8;
+        const cPos = groundSwarm.cyan[ci].position;
+        const mPos = groundSwarm.magenta[mi].position;
+        const posArr = line.geometry.attributes.position.array;
+        posArr[0] = cPos.x; posArr[1] = cPos.y + 0.1; posArr[2] = cPos.z;
+        posArr[3] = mPos.x; posArr[4] = mPos.y + 0.1; posArr[5] = mPos.z;
+        line.geometry.attributes.position.needsUpdate = true;
+        line.material.opacity = Math.random() > 0.6 ? 0.4 : 0.0;
+    });
+
+    /* ── Player interceptor wing movement ── */
+    const pWingCenterX = Math.sin(t * 0.3) * 6;
+    const pWingCenterZ = Math.cos(t * 0.3) * 4 - 2;
+    const pWingY = 3.5 + Math.sin(t * 0.5) * 1;
+    const pWingHeading = t * 0.3 + PI;
+
+    playerDrones.forEach((drone, i) => {
+        const ox = drone.formationOffset.x;
+        const oz = drone.formationOffset.y;
+        const cosH = Math.cos(pWingHeading);
+        const sinH = Math.sin(pWingHeading);
+        const wx = pWingCenterX + ox * cosH - oz * sinH;
+        const wz = pWingCenterZ + ox * sinH + oz * cosH;
+        drone.mesh.position.set(wx, pWingY + Math.sin(t + i) * 0.15, wz);
+        drone.mesh.rotation.y = pWingHeading;
+        drone.mesh.rotation.x = t * 2;
+
+        // Update contrail
+        drone.positions.pop();
+        drone.positions.unshift(drone.mesh.position.clone());
+        const posArr = drone.trailGeo.attributes.position.array;
+        for (let j = 0; j < TRAIL_LENGTH; j++) {
+            posArr[j * 3] = drone.positions[j].x;
+            posArr[j * 3 + 1] = drone.positions[j].y;
+            posArr[j * 3 + 2] = drone.positions[j].z;
+        }
+        drone.trailGeo.attributes.position.needsUpdate = true;
+    });
+
+    /* ── Enemy assault wing movement ── */
+    const eWingCenterX = Math.sin(t * 0.25 + 2) * 5;
+    const eWingCenterZ = Math.cos(t * 0.25 + 2) * 5 + 2;
+    const eWingY = 4 + Math.sin(t * 0.4 + 1) * 1;
+    const eWingHeading = t * 0.25 + 2;
+
+    enemyDrones.forEach((drone, i) => {
+        const ox = drone.formationOffset.x;
+        const oz = drone.formationOffset.y;
+        const cosH = Math.cos(eWingHeading);
+        const sinH = Math.sin(eWingHeading);
+        const wx = eWingCenterX + ox * cosH - oz * sinH;
+        const wz = eWingCenterZ + ox * sinH + oz * cosH;
+        drone.mesh.position.set(wx, eWingY + Math.sin(t * 1.2 + i) * 0.15, wz);
+        drone.mesh.rotation.y = eWingHeading;
+        drone.mesh.rotation.z = t * 1.8;
+
+        // Update contrail
+        drone.positions.pop();
+        drone.positions.unshift(drone.mesh.position.clone());
+        const posArr = drone.trailGeo.attributes.position.array;
+        for (let j = 0; j < TRAIL_LENGTH; j++) {
+            posArr[j * 3] = drone.positions[j].x;
+            posArr[j * 3 + 1] = drone.positions[j].y;
+            posArr[j * 3 + 2] = drone.positions[j].z;
+        }
+        drone.trailGeo.attributes.position.needsUpdate = true;
+    });
+
+    /* ── Dogfight cluster ── */
+    const dogfightCenter = new THREE.Vector3(5, 3, -1);
+    dogfightDrones.forEach((drone, i) => {
+        drone.orbitAngle += (i < 3 ? 1.5 : -1.8) * dt;
+        const r = drone.orbitRadius + Math.sin(t * 3 + i) * 0.3;
+        drone.mesh.position.set(
+            dogfightCenter.x + Math.cos(drone.orbitAngle) * r,
+            dogfightCenter.y + Math.sin(t * 2 + i * 0.7) * 0.4,
+            dogfightCenter.z + Math.sin(drone.orbitAngle) * r
+        );
+        drone.mesh.rotation.x = t * 3;
+        drone.mesh.rotation.z = t * 2;
+
+        // Update contrail
+        drone.positions.pop();
+        drone.positions.unshift(drone.mesh.position.clone());
+        const posArr = drone.trailGeo.attributes.position.array;
+        for (let j = 0; j < TRAIL_LENGTH; j++) {
+            posArr[j * 3] = drone.positions[j].x;
+            posArr[j * 3 + 1] = drone.positions[j].y;
+            posArr[j * 3 + 2] = drone.positions[j].z;
+        }
+        drone.trailGeo.attributes.position.needsUpdate = true;
+    });
+
+    // Dogfight tracers
+    dogfightTracers.forEach((tracer, i) => {
+        tracer.timer += dt;
+        if (tracer.timer > 0.15) {
+            tracer.timer = 0;
+            const a = dogfightDrones[i % 3];
+            const b = dogfightDrones[3 + (i % 3)];
+            const posArr = tracer.line.geometry.attributes.position.array;
+            posArr[0] = a.mesh.position.x; posArr[1] = a.mesh.position.y; posArr[2] = a.mesh.position.z;
+            posArr[3] = b.mesh.position.x; posArr[4] = b.mesh.position.y; posArr[5] = b.mesh.position.z;
+            tracer.line.geometry.attributes.position.needsUpdate = true;
+            tracer.line.material.opacity = 0.8;
+        } else {
+            tracer.line.material.opacity *= 0.85;
+        }
+    });
+
+    // Destroyed drones tumbling
+    destroyedDrones.forEach((dd, i) => {
+        dd.resetTimer += dt;
+        dd.mesh.rotation.x += dt * 5;
+        dd.mesh.rotation.z += dt * 3;
+        dd.mesh.position.y -= dt * 0.5;
+        if (dd.resetTimer > 4) {
+            dd.resetTimer = 0;
+            dd.mesh.position.set(dogfightCenter.x + (Math.random() - 0.5) * 2, dogfightCenter.y, dogfightCenter.z + (Math.random() - 0.5) * 2);
+            // Trigger explosion
+            explosionParticles[i].active = true;
+            explosionParticles[i].timer = 0;
+            explosionParticles[i].origin.copy(dd.mesh.position);
+        }
+    });
+
+    // Explosion bursts
+    explosionParticles.forEach(ep => {
+        if (!ep.active) return;
+        ep.timer += dt;
+        if (ep.timer > 1.5) {
+            ep.active = false;
+            ep.mat.opacity = 0;
+            return;
+        }
+        ep.mat.opacity = Math.max(0, 1 - ep.timer / 1.5);
+        const posArr = ep.geo.attributes.position.array;
+        ep.velocities.forEach((vel, j) => {
+            const px = ep.origin.x + vel.x * ep.timer * 20;
+            const py = ep.origin.y + vel.y * ep.timer * 20;
+            const pz = ep.origin.z + vel.z * ep.timer * 20;
+            posArr[j * 3] = px;
+            posArr[j * 3 + 1] = py;
+            posArr[j * 3 + 2] = pz;
+        });
+        ep.geo.attributes.position.needsUpdate = true;
+    });
+
+    /* ── Carrier engine exhaust ── */
+    carrierExhausts.forEach(ex => {
+        const worldPos = new THREE.Vector3();
+        ex.parent.localToWorld(worldPos.copy(ex.localPos));
+        const posArr = ex.geo.attributes.position.array;
+
+        ex.particles.forEach((p, i) => {
+            p.life -= dt * 0.8;
+            if (p.life <= 0) {
+                p.pos.copy(worldPos);
+                p.pos.x += (Math.random() - 0.5) * 0.1;
+                p.pos.y += (Math.random() - 0.5) * 0.1;
+                p.pos.z += (Math.random() - 0.5) * 0.1;
+                p.vel.set(
+                    (Math.random() - 0.5) * 0.01,
+                    (Math.random() - 0.5) * 0.005,
+                    -0.02 - Math.random() * 0.02
+                );
+                p.life = 1;
+            }
+            p.pos.add(p.vel);
+            posArr[i * 3] = p.pos.x;
+            posArr[i * 3 + 1] = p.pos.y;
+            posArr[i * 3 + 2] = p.pos.z;
+        });
+        ex.geo.attributes.position.needsUpdate = true;
+    });
+
+    // Launch bay flash
+    launchTimer += dt;
+    if (launchTimer > 3.5) {
+        launchTimer = 0;
+        launchFlash.material.opacity = 1;
+    }
+    launchFlash.material.opacity *= 0.92;
+
+    // Drone tether lines
+    const carrierWorldPos = new THREE.Vector3();
+    playerCarrier.getWorldPosition(carrierWorldPos);
+    tetherLines.forEach((line, i) => {
+        if (i < playerDrones.length) {
+            const posArr = line.geometry.attributes.position.array;
+            posArr[0] = carrierWorldPos.x;
+            posArr[1] = carrierWorldPos.y;
+            posArr[2] = carrierWorldPos.z;
+            posArr[3] = playerDrones[i].mesh.position.x;
+            posArr[4] = playerDrones[i].mesh.position.y;
+            posArr[5] = playerDrones[i].mesh.position.z;
+            line.geometry.attributes.position.needsUpdate = true;
+        }
+    });
+
+    // Shield bubble flickering
+    const shieldFlicker = 0.03 + Math.sin(t * 8) * 0.01 + (Math.random() > 0.95 ? 0.08 : 0);
+    carrierShield.material.opacity = shieldFlicker;
+    carrierShield.position.copy(playerCarrier.position);
+    carrierShield.position.y -= 0.5;
+
+    /* ── Main weapon beam (dreadnought → carrier) ── */
+    const dreadWorldPos = new THREE.Vector3();
+    enemyDreadnought.getWorldPosition(dreadWorldPos);
+    const beamStart = dreadWorldPos.clone();
+    beamStart.x += 2.5; // front of dreadnought
+    const beamEnd = carrierWorldPos.clone();
+
+    // Wobble offset
+    const wobbleY = Math.sin(t * 7) * 0.04;
+    const wobbleX = Math.cos(t * 5) * 0.03;
+    const beamPulse = 0.35 + Math.sin(t * 4) * 0.25;
+
+    beamLines.forEach((bl, i) => {
+        const off = (i - 1) * 0.06; // spread outer lines slightly
+        const posArr = bl.geo.attributes.position.array;
+        posArr[0] = beamStart.x; posArr[1] = beamStart.y + off; posArr[2] = beamStart.z;
+        posArr[3] = beamEnd.x + wobbleX; posArr[4] = beamEnd.y + wobbleY + off; posArr[5] = beamEnd.z;
+        bl.geo.attributes.position.needsUpdate = true;
+        bl.mat.opacity = beamPulse * beamOpacities[i];
+    });
+
+    // Impact sparks at shield
+    const sparkData = beamSparks[0];
+    const posArr = sparkData.geo.attributes.position.array;
+    sparkData.sparks.forEach((s, i) => {
+        s.life -= dt * 2;
+        if (s.life <= 0) {
+            s.pos.copy(beamEnd);
+            s.vel.set(
+                (Math.random() - 0.5) * 0.08,
+                (Math.random() - 0.5) * 0.08,
+                (Math.random() - 0.5) * 0.08
+            );
+            s.life = 1;
+        }
+        s.pos.add(s.vel);
+        posArr[i * 3] = s.pos.x;
+        posArr[i * 3 + 1] = s.pos.y;
+        posArr[i * 3 + 2] = s.pos.z;
+    });
+    sparkData.geo.attributes.position.needsUpdate = true;
+    sparkData.mat.opacity = 0.6 + Math.sin(t * 10) * 0.3;
+
+    /* ── Orbital platform rotation ── */
+    orbitalPlatform.rotation.y = t * 0.1;
+
+    /* ── Orbital strike beams cycling ── */
+    orbitalBeams.forEach((ob, i) => {
+        const cycle = ((t + ob.phase) % 5); // 2s on, 3s off
+        const isOn = cycle < 2;
+        const fadeOp = isOn ? Math.min(cycle * 2, 1) * 0.7 : 0;
+
+        ob.line.material.opacity = fadeOp;
+        ob.impactRing.material.opacity = fadeOp * 0.6;
+
+        // Update beam start from rotating orbital platform
+        const platformWorldPos = new THREE.Vector3();
+        orbitalPlatform.getWorldPosition(platformWorldPos);
+        const linePos = ob.line.geometry.attributes.position.array;
+        linePos[0] = platformWorldPos.x;
+        linePos[1] = platformWorldPos.y;
+        linePos[2] = platformWorldPos.z;
+        ob.line.geometry.attributes.position.needsUpdate = true;
+
+        // Impact ring scale pulse
+        if (isOn) {
+            const s = 1 + Math.sin(t * 6 + i) * 0.3;
+            ob.impactRing.scale.setScalar(s);
+        }
+
+        // Impact particles
+        ob.pMat.opacity = fadeOp * 0.8;
+        const pPos = ob.pGeo.attributes.position.array;
+        ob.particles.forEach((p, j) => {
+            p.life -= dt * 1.5;
+            if (p.life <= 0 && isOn) {
+                p.pos.copy(ob.target);
+                p.vel.set(
+                    (Math.random() - 0.5) * 0.06,
+                    Math.random() * 0.04,
+                    (Math.random() - 0.5) * 0.06
+                );
+                p.life = 1;
+            }
+            p.pos.add(p.vel);
+            pPos[j * 3] = p.pos.x;
+            pPos[j * 3 + 1] = p.pos.y;
+            pPos[j * 3 + 2] = p.pos.z;
+        });
+        ob.pGeo.attributes.position.needsUpdate = true;
+    });
+
+    /* ── Warp portal pulsing ── */
+    const warpScale = 1 + Math.sin(t * 1.5) * 0.5;
+    warpRing.scale.setScalar(warpScale);
+    warpRing.rotation.z = t * 0.5;
+    warpRing.material.opacity = 0.4 + Math.sin(t * 2) * 0.2;
+
+    // Warp particles
+    const wPos = warpParticles.geo.attributes.position.array;
+    warpParticles.particles.forEach((p, i) => {
+        p.life -= dt * 0.3;
+        if (p.life <= 0) {
+            const angle = Math.random() * TAU;
+            const r = 0.3 + Math.random() * 0.8;
+            p.pos.set(
+                -8 + Math.cos(angle) * r,
+                15 + (Math.random() - 0.5) * 0.3,
+                6 + Math.sin(angle) * r
+            );
+            p.vel.set(
+                Math.cos(angle) * 0.04,
+                (Math.random() - 0.5) * 0.02,
+                Math.sin(angle) * 0.04
+            );
+            p.life = 1;
+        }
+        p.pos.add(p.vel);
+        wPos[i * 3] = p.pos.x;
+        wPos[i * 3 + 1] = p.pos.y;
+        wPos[i * 3 + 2] = p.pos.z;
+    });
+    warpParticles.geo.attributes.position.needsUpdate = true;
+
+    /* ── Data link web pulsing ── */
+    const linkOp = 0.04 + Math.sin(t * 0.8) * 0.03;
+    dataLinks.forEach(dl => {
+        dl.mat.opacity = linkOp;
+    });
+
+    /* ── Ambient data motes ── */
+    const mPos = ambientMotes.geo.attributes.position.array;
+    ambientMotes.particles.forEach((p, i) => {
+        p.pos.add(p.vel);
+        // Wrap around
+        if (p.pos.x > 12) p.pos.x = -12;
+        if (p.pos.x < -12) p.pos.x = 12;
+        if (p.pos.y > 18) p.pos.y = 0;
+        if (p.pos.y < 0) p.pos.y = 18;
+        if (p.pos.z > 12) p.pos.z = -12;
+        if (p.pos.z < -12) p.pos.z = 12;
+        mPos[i * 3] = p.pos.x;
+        mPos[i * 3 + 1] = p.pos.y;
+        mPos[i * 3 + 2] = p.pos.z;
+    });
+    ambientMotes.geo.attributes.position.needsUpdate = true;
+
+    /* ── Destruction debris ── */
+    debrisGroups.forEach((group, gi) => {
+        group.forEach(d => {
+            d.life -= dt * 0.25;
+            if (d.life <= 0) {
+                d.mesh.position.set(
+                    dogfightCenter.x + (Math.random() - 0.5) * 2,
+                    dogfightCenter.y,
+                    dogfightCenter.z + (Math.random() - 0.5) * 2
+                );
+                d.vel.set(
+                    (Math.random() - 0.5) * 0.04,
+                    -Math.random() * 0.02 - 0.01,
+                    (Math.random() - 0.5) * 0.04
+                );
+                d.life = 1;
+            }
+            d.mesh.position.add(d.vel);
+            d.mesh.rotation.x += dt * 3;
+            d.mesh.rotation.z += dt * 2;
+            d.mesh.material.opacity = Math.max(0, d.life * 0.5);
+        });
+    });
+
+    /* ── HP bar billboard ── */
+    hpBar.position.set(playerCarrier.position.x, playerCarrier.position.y + 2.5, playerCarrier.position.z);
+    hpBar.quaternion.copy(camera.quaternion);
+
+    /* ── Render ── */
+    controls.update();
+    renderer.render(scene, camera);
+}
+
+animate();
+
+/* ====================================================================
+   RESIZE
+   ==================================================================== */
+window.addEventListener('resize', () => {
+    const w = window.innerWidth, h = window.innerHeight;
+    aspect = w / h;
+    camera.left   = frustum * aspect / -2;
+    camera.right  = frustum * aspect / 2;
+    camera.top    = frustum / 2;
+    camera.bottom = frustum / -2;
+    camera.updateProjectionMatrix();
+    renderer.setSize(w, h);
+});
+
+</script>
+</body>
+</html>

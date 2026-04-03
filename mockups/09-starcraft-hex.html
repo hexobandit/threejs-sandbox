@@ -1,0 +1,972 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0,user-scalable=no">
+<title>09 / Starcraft Hex</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{overflow:hidden;background:#000;touch-action:none;-webkit-touch-callout:none;-webkit-user-select:none;user-select:none}
+canvas{display:block}
+#ui{position:fixed;top:0;left:0;padding:12px;font-family:'Courier New',monospace;color:#fff;pointer-events:none;z-index:10}
+#ui h1{font-size:14px;color:#00ff88;margin-bottom:4px;text-shadow:0 0 8px #00ff8866}
+#ui p{font-size:11px;color:#888;line-height:1.4;max-width:280px}
+#stats{font-size:11px;color:#ffcc00;margin-top:8px;text-shadow:0 0 6px #ffcc0044}
+#back{position:fixed;top:12px;right:12px;font-family:'Courier New',monospace;font-size:12px;color:#00ff88;text-decoration:none;z-index:10;text-shadow:0 0 8px #00ff8866}
+#back:hover{color:#44ffaa}
+#resources{position:fixed;bottom:0;left:0;right:0;padding:10px 16px;font-family:'Courier New',monospace;font-size:13px;color:#00ffcc;background:rgba(0,15,10,0.9);border-top:1px solid #00ff8844;z-index:10;pointer-events:none;text-shadow:0 0 8px #00ffcc66;display:flex;justify-content:space-between;align-items:center}
+#resource-bar{display:flex;gap:24px}
+#resource-bar span{white-space:nowrap}
+.res-minerals{color:#44aaff}
+.res-gas{color:#44ff66}
+.res-supply{color:#ffcc44}
+#minimap-wrap{position:fixed;bottom:44px;right:12px;border:1px solid #00ff8844;background:rgba(0,10,5,0.85);z-index:10;pointer-events:none;border-radius:4px;overflow:hidden;padding:4px}
+#minimap-label{font-family:'Courier New',monospace;font-size:8px;color:#00ff8888;display:block;margin-bottom:2px}
+#minimap{display:block}
+</style>
+</head>
+<body>
+
+<div id="ui">
+  <h1>09 / STARCRAFT HEX</h1>
+  <p>Terran vs Zerg &middot; Hex Grid RTS &middot; Isometric Command View</p>
+  <div id="stats">FPS: --</div>
+</div>
+
+<a id="back" href="../index.html">&larr; back</a>
+
+<div id="resources">
+  <div id="resource-bar">
+    <span class="res-minerals">MINERALS: 1250</span>
+    <span class="res-gas">GAS: 800</span>
+    <span class="res-supply">SUPPLY: 45/80</span>
+  </div>
+  <span style="color:#00ff8888;font-size:10px">SECTOR 7G &middot; THREAT LEVEL: HIGH</span>
+</div>
+
+<div id="minimap-wrap">
+  <span id="minimap-label">TACTICAL</span>
+  <canvas id="minimap" width="140" height="140"></canvas>
+</div>
+
+<script type="importmap">
+{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"}}
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+/* ====================================================================
+   RENDERER
+   ==================================================================== */
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setClearColor(0x030808);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.1;
+document.body.appendChild(renderer.domElement);
+
+/* ====================================================================
+   SCENE
+   ==================================================================== */
+const scene = new THREE.Scene();
+scene.fog = new THREE.FogExp2(0x030808, 0.008);
+
+/* ====================================================================
+   ORTHOGRAPHIC CAMERA (isometric 45 deg)
+   ==================================================================== */
+const frustum = 40;
+let aspect = window.innerWidth / window.innerHeight;
+const camera = new THREE.OrthographicCamera(
+    frustum * aspect / -2, frustum * aspect / 2,
+    frustum / 2, frustum / -2, 0.1, 400
+);
+camera.position.set(35, 40, 35);
+camera.lookAt(0, 0, 0);
+
+/* ====================================================================
+   CONTROLS
+   ==================================================================== */
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.autoRotate = true;
+controls.autoRotateSpeed = 0.1;
+controls.maxPolarAngle = Math.PI / 2.2;
+controls.minZoom = 0.3;
+controls.maxZoom = 3;
+controls.addEventListener('start', () => { controls.autoRotate = false; });
+
+/* ====================================================================
+   RESIZE
+   ==================================================================== */
+window.addEventListener('resize', () => {
+    const w = window.innerWidth, h = window.innerHeight;
+    aspect = w / h;
+    camera.left   = frustum * aspect / -2;
+    camera.right  = frustum * aspect / 2;
+    camera.top    = frustum / 2;
+    camera.bottom = frustum / -2;
+    camera.updateProjectionMatrix();
+    renderer.setSize(w, h);
+});
+
+/* ====================================================================
+   LIGHTING
+   ==================================================================== */
+scene.add(new THREE.AmbientLight(0x112222, 0.6));
+const dirLight = new THREE.DirectionalLight(0x88ccff, 0.5);
+dirLight.position.set(20, 50, 25);
+scene.add(dirLight);
+const fillLight = new THREE.DirectionalLight(0x224444, 0.3);
+fillLight.position.set(-25, 20, -20);
+scene.add(fillLight);
+// Subtle green rim from below
+const rimLight = new THREE.DirectionalLight(0x00ff44, 0.15);
+rimLight.position.set(0, -10, 0);
+scene.add(rimLight);
+
+/* ====================================================================
+   HEX MATH (flat-top, axial coordinates)
+   ==================================================================== */
+function hexToWorld(q, r) {
+    const S = 1.08;
+    return { x: S * 1.5 * q, z: S * Math.sqrt(3) * (r + q / 2) };
+}
+
+function hexDist(q1, r1, q2, r2) {
+    const dq = q1 - q2, dr = r1 - r2;
+    return Math.max(Math.abs(dq), Math.abs(dr), Math.abs(dq + dr));
+}
+
+const GRID_R = 9;
+
+/* ====================================================================
+   TERRITORY / FOG OF WAR DATA
+   ==================================================================== */
+// Player base center
+const playerBase = { q: 0, r: 6 };
+// Enemy base center
+const enemyBase  = { q: 0, r: -6 };
+
+// Player buildings positions
+const commandCenterHex = { q: 0, r: 6 };
+const barracksHexes    = [{ q: -1, r: 6 }, { q: 1, r: 5 }];
+const factoryHex       = { q: -2, r: 7 };
+const supplyHexes      = [{ q: 2, r: 5 }, { q: 2, r: 4 }, { q: -1, r: 7 }];
+const mineralHexes     = [{ q: 3, r: 4 }, { q: 3, r: 3 }, { q: 4, r: 3 }, { q: 4, r: 2 }, { q: 3, r: 5 }];
+const vespeneHexes     = [{ q: -3, r: 7 }, { q: -3, r: 8 }];
+
+// Enemy buildings positions
+const hatcheryHex      = { q: 0, r: -6 };
+const spawningPoolHex  = { q: 1, r: -6 };
+const spineCrawlerHexes = [{ q: -1, r: -5 }, { q: 1, r: -5 }, { q: 0, r: -4 }];
+const creepHexes = [];
+// Generate creep spread around enemy base
+for (let q = -GRID_R; q <= GRID_R; q++) {
+    for (let r = Math.max(-GRID_R, -q - GRID_R); r <= Math.min(GRID_R, -q + GRID_R); r++) {
+        if (hexDist(q, r, enemyBase.q, enemyBase.r) <= 3) {
+            creepHexes.push({ q, r });
+        }
+    }
+}
+
+// Player unit visibility positions (for fog of war)
+const playerVisibleCenters = [
+    playerBase,
+    { q: 0, r: 2 }, // marine group area
+    { q: -1, r: 3 }, // siege tanks
+];
+const VISIBILITY_RANGE = 5;
+
+function isPlayerVisible(q, r) {
+    for (const c of playerVisibleCenters) {
+        if (hexDist(q, r, c.q, c.r) <= VISIBILITY_RANGE) return true;
+    }
+    return false;
+}
+
+function isCreep(q, r) {
+    return creepHexes.some(h => h.q === q && h.r === r);
+}
+
+function isSpecialHex(q, r) {
+    const all = [commandCenterHex, ...barracksHexes, factoryHex, ...supplyHexes,
+        ...mineralHexes, ...vespeneHexes, hatcheryHex, spawningPoolHex, ...spineCrawlerHexes];
+    return all.some(h => h.q === q && h.r === r);
+}
+
+/* ====================================================================
+   SHARED GEOMETRIES & MATERIALS
+   ==================================================================== */
+const hexGeo = new THREE.CylinderGeometry(1, 1, 0.2, 6);
+
+function hexMat(color, emissive, ei, roughness = 0.75) {
+    return new THREE.MeshStandardMaterial({
+        color, emissive, emissiveIntensity: ei, roughness, metalness: 0.1
+    });
+}
+
+/* ====================================================================
+   BUILD HEX GRID
+   ==================================================================== */
+const hexGroup = new THREE.Group();
+scene.add(hexGroup);
+const tiles = [];
+
+for (let q = -GRID_R; q <= GRID_R; q++) {
+    for (let r = Math.max(-GRID_R, -q - GRID_R); r <= Math.min(GRID_R, -q + GRID_R); r++) {
+        const vis = isPlayerVisible(q, r);
+        const onCreep = isCreep(q, r);
+
+        let baseColor, emissive, ei;
+        if (onCreep) {
+            baseColor = 0x1a0a1a;
+            emissive  = 0x660033;
+            ei = vis ? 0.08 : 0.03;
+        } else if (hexDist(q, r, playerBase.q, playerBase.r) <= 3) {
+            baseColor = 0x0a1a1a;
+            emissive  = 0x004444;
+            ei = 0.06;
+        } else {
+            baseColor = vis ? 0x0d1210 : 0x060808;
+            emissive  = vis ? 0x112211 : 0x050505;
+            ei = vis ? 0.04 : 0.01;
+        }
+
+        // Darken fog of war hexes
+        if (!vis) {
+            baseColor = 0x040606;
+            emissive  = onCreep ? 0x220011 : 0x050505;
+            ei = 0.01;
+        }
+
+        const mat = hexMat(baseColor, emissive, ei);
+        const mesh = new THREE.Mesh(hexGeo, mat);
+        const { x, z } = hexToWorld(q, r);
+        mesh.position.set(x, 0.1, z);
+        mesh.rotation.y = Math.PI / 6;
+        hexGroup.add(mesh);
+
+        // Subtle wireframe
+        const edgeGeo = new THREE.EdgesGeometry(hexGeo);
+        const wireColor = onCreep ? 0x330022 : (vis ? 0x003322 : 0x111111);
+        const wire = new THREE.LineSegments(edgeGeo, new THREE.LineBasicMaterial({
+            color: wireColor, transparent: true, opacity: vis ? 0.2 : 0.08
+        }));
+        mesh.add(wire);
+
+        tiles.push({ mesh, q, r, worldX: x, worldZ: z, vis });
+    }
+}
+
+/* ====================================================================
+   PLAYER BASE: COMMAND CENTER
+   ==================================================================== */
+const ccGroup = new THREE.Group();
+const ccPos = hexToWorld(commandCenterHex.q, commandCenterHex.r);
+ccGroup.position.set(ccPos.x, 0.2, ccPos.z);
+
+const ccMat = new THREE.MeshStandardMaterial({
+    color: 0x1a2a3a, emissive: 0x0088ff, emissiveIntensity: 0.2, roughness: 0.4, metalness: 0.3
+});
+// Main building body
+const ccBody = new THREE.Mesh(new THREE.BoxGeometry(1.5, 1.0, 1.5), ccMat);
+ccBody.position.y = 0.5;
+ccGroup.add(ccBody);
+ccBody.add(new THREE.LineSegments(
+    new THREE.EdgesGeometry(ccBody.geometry),
+    new THREE.LineBasicMaterial({ color: 0x00aaff, transparent: true, opacity: 0.5 })
+));
+// Roof detail
+const ccRoof = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.15, 1.2),
+    new THREE.MeshStandardMaterial({ color: 0x2a3a4a, emissive: 0x0066cc, emissiveIntensity: 0.3, roughness: 0.3, metalness: 0.5 }));
+ccRoof.position.y = 1.08;
+ccGroup.add(ccRoof);
+// Antenna
+const ccAntenna = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 1.4, 4),
+    new THREE.MeshStandardMaterial({ color: 0x00aaff, emissive: 0x00aaff, emissiveIntensity: 0.6 }));
+ccAntenna.position.set(0.4, 1.9, 0.4);
+ccGroup.add(ccAntenna);
+// Antenna tip
+const ccTip = new THREE.Mesh(new THREE.SphereGeometry(0.08, 8, 8),
+    new THREE.MeshBasicMaterial({ color: 0x00ccff }));
+ccTip.position.set(0.4, 2.65, 0.4);
+ccGroup.add(ccTip);
+scene.add(ccGroup);
+
+/* ====================================================================
+   PLAYER BASE: BARRACKS (2)
+   ==================================================================== */
+const barracksMat = new THREE.MeshStandardMaterial({
+    color: 0x1a2a30, emissive: 0x0066aa, emissiveIntensity: 0.12, roughness: 0.5, metalness: 0.2
+});
+
+barracksHexes.forEach(hex => {
+    const g = new THREE.Group();
+    const p = hexToWorld(hex.q, hex.r);
+    g.position.set(p.x, 0.2, p.z);
+    const body = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.7, 0.9), barracksMat);
+    body.position.y = 0.35;
+    g.add(body);
+    body.add(new THREE.LineSegments(
+        new THREE.EdgesGeometry(body.geometry),
+        new THREE.LineBasicMaterial({ color: 0x0088cc, transparent: true, opacity: 0.4 })
+    ));
+    // Door
+    const door = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.4, 0.05),
+        new THREE.MeshBasicMaterial({ color: 0x00aaff, transparent: true, opacity: 0.3 }));
+    door.position.set(0, 0.2, 0.48);
+    g.add(door);
+    scene.add(g);
+});
+
+/* ====================================================================
+   PLAYER BASE: FACTORY
+   ==================================================================== */
+const factoryGroup = new THREE.Group();
+const fPos = hexToWorld(factoryHex.q, factoryHex.r);
+factoryGroup.position.set(fPos.x, 0.2, fPos.z);
+
+const factoryMat = new THREE.MeshStandardMaterial({
+    color: 0x1a2830, emissive: 0x0055aa, emissiveIntensity: 0.1, roughness: 0.5, metalness: 0.3
+});
+const factoryBody = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.6, 1.0), factoryMat);
+factoryBody.position.y = 0.3;
+factoryGroup.add(factoryBody);
+factoryBody.add(new THREE.LineSegments(
+    new THREE.EdgesGeometry(factoryBody.geometry),
+    new THREE.LineBasicMaterial({ color: 0x0088cc, transparent: true, opacity: 0.4 })
+));
+// Smokestack
+const stack = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.1, 0.5, 6),
+    new THREE.MeshStandardMaterial({ color: 0x333333, roughness: 0.8 }));
+stack.position.set(-0.4, 0.85, 0.2);
+factoryGroup.add(stack);
+scene.add(factoryGroup);
+
+// Factory smoke particles
+const smokeCount = 20;
+const smokeGeo = new THREE.BufferGeometry();
+const smokePositions = new Float32Array(smokeCount * 3);
+const smokeSpeeds = [];
+for (let i = 0; i < smokeCount; i++) {
+    smokePositions[i * 3]     = fPos.x - 0.4 + (Math.random() - 0.5) * 0.15;
+    smokePositions[i * 3 + 1] = 1.1 + Math.random() * 1.5;
+    smokePositions[i * 3 + 2] = fPos.z + 0.2 + (Math.random() - 0.5) * 0.15;
+    smokeSpeeds.push(0.3 + Math.random() * 0.4);
+}
+smokeGeo.setAttribute('position', new THREE.BufferAttribute(smokePositions, 3));
+const smokeMat = new THREE.PointsMaterial({ color: 0x556666, size: 0.15, transparent: true, opacity: 0.4 });
+const smokeParticles = new THREE.Points(smokeGeo, smokeMat);
+scene.add(smokeParticles);
+
+/* ====================================================================
+   PLAYER BASE: SUPPLY DEPOTS (3)
+   ==================================================================== */
+const supplyMat = new THREE.MeshStandardMaterial({
+    color: 0x1a2530, emissive: 0x0044aa, emissiveIntensity: 0.08, roughness: 0.6
+});
+
+supplyHexes.forEach(hex => {
+    const p = hexToWorld(hex.q, hex.r);
+    const body = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.4, 0.7), supplyMat);
+    body.position.set(p.x, 0.4, p.z);
+    body.add(new THREE.LineSegments(
+        new THREE.EdgesGeometry(body.geometry),
+        new THREE.LineBasicMaterial({ color: 0x0066aa, transparent: true, opacity: 0.3 })
+    ));
+    scene.add(body);
+});
+
+/* ====================================================================
+   MINERAL PATCHES (blue crystal clusters)
+   ==================================================================== */
+const mineralCrystals = [];
+const crystalMat = new THREE.MeshStandardMaterial({
+    color: 0x1144cc, emissive: 0x2266ff, emissiveIntensity: 0.8, roughness: 0.2, metalness: 0.6,
+    transparent: true, opacity: 0.85
+});
+
+mineralHexes.forEach(hex => {
+    const p = hexToWorld(hex.q, hex.r);
+    const cluster = new THREE.Group();
+    cluster.position.set(p.x, 0.2, p.z);
+
+    // 3-5 crystal shards per patch
+    const count = 3 + Math.floor(Math.random() * 3);
+    for (let i = 0; i < count; i++) {
+        const cw = 0.1 + Math.random() * 0.12;
+        const ch = 0.3 + Math.random() * 0.5;
+        const cd = 0.08 + Math.random() * 0.1;
+        const crystal = new THREE.Mesh(new THREE.BoxGeometry(cw, ch, cd), crystalMat);
+        const angle = (i / count) * Math.PI * 2;
+        const radius = 0.15 + Math.random() * 0.25;
+        crystal.position.set(Math.cos(angle) * radius, ch / 2 + 0.05, Math.sin(angle) * radius);
+        crystal.rotation.set(
+            (Math.random() - 0.5) * 0.4,
+            Math.random() * Math.PI,
+            (Math.random() - 0.5) * 0.3
+        );
+        cluster.add(crystal);
+    }
+
+    // Blue glow underneath
+    const glowGeo = new THREE.CircleGeometry(0.5, 16);
+    const glowMat = new THREE.MeshBasicMaterial({ color: 0x0044ff, transparent: true, opacity: 0.15, side: THREE.DoubleSide });
+    const glow = new THREE.Mesh(glowGeo, glowMat);
+    glow.rotation.x = -Math.PI / 2;
+    glow.position.y = 0.01;
+    cluster.add(glow);
+
+    scene.add(cluster);
+    mineralCrystals.push(cluster);
+});
+
+/* ====================================================================
+   VESPENE GEYSERS (green glowing with particles)
+   ==================================================================== */
+const vespeneParticleGroups = [];
+
+vespeneHexes.forEach(hex => {
+    const p = hexToWorld(hex.q, hex.r);
+    const g = new THREE.Group();
+    g.position.set(p.x, 0.2, p.z);
+
+    // Geyser vent
+    const vent = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.35, 0.45, 0.4, 8),
+        new THREE.MeshStandardMaterial({ color: 0x1a3322, emissive: 0x00ff44, emissiveIntensity: 0.3, roughness: 0.6 })
+    );
+    vent.position.y = 0.2;
+    g.add(vent);
+
+    // Inner glow
+    const innerGlow = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.2, 0.2, 0.1, 8),
+        new THREE.MeshBasicMaterial({ color: 0x44ff88, transparent: true, opacity: 0.6 })
+    );
+    innerGlow.position.y = 0.42;
+    g.add(innerGlow);
+
+    // Ground glow
+    const groundGlow = new THREE.Mesh(
+        new THREE.CircleGeometry(0.6, 16),
+        new THREE.MeshBasicMaterial({ color: 0x00ff33, transparent: true, opacity: 0.1, side: THREE.DoubleSide })
+    );
+    groundGlow.rotation.x = -Math.PI / 2;
+    groundGlow.position.y = 0.01;
+    g.add(groundGlow);
+
+    scene.add(g);
+
+    // Vespene particles
+    const pCount = 30;
+    const pGeo = new THREE.BufferGeometry();
+    const pPos = new Float32Array(pCount * 3);
+    const pSpeeds = [];
+    for (let i = 0; i < pCount; i++) {
+        pPos[i * 3]     = p.x + (Math.random() - 0.5) * 0.3;
+        pPos[i * 3 + 1] = 0.5 + Math.random() * 2.0;
+        pPos[i * 3 + 2] = p.z + (Math.random() - 0.5) * 0.3;
+        pSpeeds.push(0.4 + Math.random() * 0.6);
+    }
+    pGeo.setAttribute('position', new THREE.BufferAttribute(pPos, 3));
+    const pMat = new THREE.PointsMaterial({ color: 0x44ff88, size: 0.1, transparent: true, opacity: 0.5 });
+    const particles = new THREE.Points(pGeo, pMat);
+    scene.add(particles);
+    vespeneParticleGroups.push({ particles, speeds: pSpeeds, baseX: p.x, baseZ: p.z });
+});
+
+/* ====================================================================
+   ENEMY BASE: HATCHERY (organic sphere)
+   ==================================================================== */
+const hatcheryGroup = new THREE.Group();
+const hPos = hexToWorld(hatcheryHex.q, hatcheryHex.r);
+hatcheryGroup.position.set(hPos.x, 0.2, hPos.z);
+
+const hatcheryMat = new THREE.MeshStandardMaterial({
+    color: 0x4a1a2a, emissive: 0xff2244, emissiveIntensity: 0.2, roughness: 0.55, metalness: 0.1
+});
+// Main dome
+const hatcheryDome = new THREE.Mesh(new THREE.SphereGeometry(0.8, 16, 12, 0, Math.PI * 2, 0, Math.PI / 2), hatcheryMat);
+hatcheryDome.position.y = 0.0;
+hatcheryGroup.add(hatcheryDome);
+// Organic tendrils (small cylinders radiating out)
+for (let i = 0; i < 6; i++) {
+    const angle = (i / 6) * Math.PI * 2;
+    const tendril = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.04, 0.08, 0.6, 5),
+        new THREE.MeshStandardMaterial({ color: 0x3a1020, emissive: 0x880033, emissiveIntensity: 0.15, roughness: 0.7 })
+    );
+    tendril.position.set(Math.cos(angle) * 0.9, 0.1, Math.sin(angle) * 0.9);
+    tendril.rotation.z = Math.cos(angle) * 0.5;
+    tendril.rotation.x = Math.sin(angle) * 0.5;
+    hatcheryGroup.add(tendril);
+}
+scene.add(hatcheryGroup);
+
+/* ====================================================================
+   ENEMY BASE: SPAWNING POOL (flat pulsing disc)
+   ==================================================================== */
+const spPos = hexToWorld(spawningPoolHex.q, spawningPoolHex.r);
+const spawningPoolMat = new THREE.MeshStandardMaterial({
+    color: 0x3a0a1a, emissive: 0xff1133, emissiveIntensity: 0.3, roughness: 0.8, metalness: 0.0
+});
+const spawningPool = new THREE.Mesh(new THREE.CylinderGeometry(0.7, 0.7, 0.12, 16), spawningPoolMat);
+spawningPool.position.set(spPos.x, 0.26, spPos.z);
+scene.add(spawningPool);
+
+// Pool glow ring
+const poolGlow = new THREE.Mesh(
+    new THREE.RingGeometry(0.6, 0.85, 20),
+    new THREE.MeshBasicMaterial({ color: 0xff1133, transparent: true, opacity: 0.2, side: THREE.DoubleSide })
+);
+poolGlow.rotation.x = -Math.PI / 2;
+poolGlow.position.set(spPos.x, 0.33, spPos.z);
+scene.add(poolGlow);
+
+/* ====================================================================
+   ENEMY BASE: SPINE CRAWLERS
+   ==================================================================== */
+spineCrawlerHexes.forEach(hex => {
+    const p = hexToWorld(hex.q, hex.r);
+    const g = new THREE.Group();
+    g.position.set(p.x, 0.2, p.z);
+
+    // Base
+    const base = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.25, 0.35, 0.3, 6),
+        new THREE.MeshStandardMaterial({ color: 0x3a1520, emissive: 0x881133, emissiveIntensity: 0.12, roughness: 0.7 })
+    );
+    base.position.y = 0.15;
+    g.add(base);
+
+    // Spine (tall thin cylinder)
+    const spine = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.04, 0.1, 1.8, 5),
+        new THREE.MeshStandardMaterial({ color: 0x4a1a2a, emissive: 0xaa2244, emissiveIntensity: 0.15, roughness: 0.6 })
+    );
+    spine.position.y = 1.2;
+    g.add(spine);
+
+    // Spiky top (cone)
+    const spike = new THREE.Mesh(
+        new THREE.ConeGeometry(0.15, 0.4, 5),
+        new THREE.MeshStandardMaterial({ color: 0xff3355, emissive: 0xff3355, emissiveIntensity: 0.3 })
+    );
+    spike.position.y = 2.3;
+    g.add(spike);
+
+    scene.add(g);
+});
+
+/* ====================================================================
+   UNITS: PLAYER MARINES (InstancedMesh, 10 units)
+   ==================================================================== */
+const MARINE_COUNT = 10;
+const marineGeo = new THREE.BoxGeometry(0.18, 0.3, 0.18);
+const marineMat = new THREE.MeshStandardMaterial({
+    color: 0x2244aa, emissive: 0x0066ff, emissiveIntensity: 0.3, roughness: 0.4
+});
+const marines = new THREE.InstancedMesh(marineGeo, marineMat, MARINE_COUNT);
+scene.add(marines);
+
+// Marine formation path (hex waypoints)
+const marinePath = [
+    { q: 0, r: 4 }, { q: 0, r: 3 }, { q: 0, r: 2 }, { q: 0, r: 1 }, { q: 0, r: 0 },
+    { q: 1, r: -1 }, { q: 0, r: 0 }, { q: 0, r: 1 }, { q: 0, r: 2 }, { q: 0, r: 3 }
+].map(h => hexToWorld(h.q, h.r));
+
+let marinePathProgress = 0;
+const marineFormationOffsets = [];
+for (let i = 0; i < MARINE_COUNT; i++) {
+    // 2 rows of 5 formation
+    const row = Math.floor(i / 5);
+    const col = i % 5;
+    marineFormationOffsets.push({
+        x: (col - 2) * 0.35,
+        z: row * 0.4
+    });
+}
+
+/* ====================================================================
+   UNITS: PLAYER SIEGE TANKS (2 stationary)
+   ==================================================================== */
+const tankPositions = [{ q: -1, r: 3 }, { q: -2, r: 4 }];
+tankPositions.forEach(hex => {
+    const p = hexToWorld(hex.q, hex.r);
+    const g = new THREE.Group();
+    g.position.set(p.x, 0.25, p.z);
+
+    // Hull
+    const hull = new THREE.Mesh(
+        new THREE.BoxGeometry(0.6, 0.25, 0.4),
+        new THREE.MeshStandardMaterial({ color: 0x2244aa, emissive: 0x0055cc, emissiveIntensity: 0.15, roughness: 0.4, metalness: 0.4 })
+    );
+    hull.position.y = 0.12;
+    g.add(hull);
+
+    // Turret
+    const turret = new THREE.Mesh(
+        new THREE.BoxGeometry(0.3, 0.15, 0.25),
+        new THREE.MeshStandardMaterial({ color: 0x3355bb, emissive: 0x0066dd, emissiveIntensity: 0.2, roughness: 0.3, metalness: 0.5 })
+    );
+    turret.position.y = 0.32;
+    g.add(turret);
+
+    // Barrel
+    const barrel = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.03, 0.03, 0.5, 6),
+        new THREE.MeshStandardMaterial({ color: 0x4466cc, emissive: 0x0088ff, emissiveIntensity: 0.25 })
+    );
+    barrel.rotation.z = Math.PI / 2;
+    barrel.position.set(0.4, 0.35, 0);
+    g.add(barrel);
+
+    scene.add(g);
+});
+
+/* ====================================================================
+   UNITS: ENEMY ZERGLINGS (InstancedMesh, 15 units, swarm movement)
+   ==================================================================== */
+const ZERGLING_COUNT = 15;
+const zerglingGeo = new THREE.BoxGeometry(0.14, 0.18, 0.22);
+const zerglingMat = new THREE.MeshStandardMaterial({
+    color: 0x882244, emissive: 0xff2255, emissiveIntensity: 0.3, roughness: 0.5
+});
+const zerglings = new THREE.InstancedMesh(zerglingGeo, zerglingMat, ZERGLING_COUNT);
+scene.add(zerglings);
+
+// Zergling swarm center path (rushing south toward center)
+const zerglingSwarmCenter = hexToWorld(0, -2);
+const zerglingOffsets = [];
+for (let i = 0; i < ZERGLING_COUNT; i++) {
+    zerglingOffsets.push({
+        x: (Math.random() - 0.5) * 3.0,
+        z: (Math.random() - 0.5) * 2.5,
+        noisePhase: Math.random() * Math.PI * 2,
+        noiseSpeed: 0.5 + Math.random() * 1.5,
+        noiseAmp: 0.2 + Math.random() * 0.4
+    });
+}
+
+/* ====================================================================
+   UNITS: ENEMY MUTALISKS (3 flying pyramids)
+   ==================================================================== */
+const MUTALISK_COUNT = 3;
+const mutaliskGeo = new THREE.ConeGeometry(0.2, 0.5, 4);
+const mutaliskMat = new THREE.MeshStandardMaterial({
+    color: 0x992244, emissive: 0xff3366, emissiveIntensity: 0.35, roughness: 0.4
+});
+const mutalisks = [];
+for (let i = 0; i < MUTALISK_COUNT; i++) {
+    const m = new THREE.Mesh(mutaliskGeo, mutaliskMat);
+    m.rotation.x = Math.PI; // point down like flying creature
+    m.userData.orbitAngle = (i / MUTALISK_COUNT) * Math.PI * 2;
+    m.userData.orbitRadius = 4 + i * 1.5;
+    m.userData.orbitSpeed = 0.15 + i * 0.05;
+    m.userData.height = 4 + i * 0.5;
+    scene.add(m);
+    mutalisks.push(m);
+}
+
+/* ====================================================================
+   BATTLEFIELD EFFECTS: EXPLOSION MARKERS
+   ==================================================================== */
+const explosionParticleGroups = [];
+const explosionPositions = [
+    hexToWorld(0, 0), hexToWorld(1, -1), hexToWorld(-1, 1)
+];
+
+explosionPositions.forEach(pos => {
+    const count = 25;
+    const geo = new THREE.BufferGeometry();
+    const positions = new Float32Array(count * 3);
+    const velocities = [];
+    for (let i = 0; i < count; i++) {
+        positions[i * 3]     = pos.x;
+        positions[i * 3 + 1] = 0.5;
+        positions[i * 3 + 2] = pos.z;
+        velocities.push({
+            x: (Math.random() - 0.5) * 2,
+            y: Math.random() * 2,
+            z: (Math.random() - 0.5) * 2,
+            life: Math.random()
+        });
+    }
+    geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    const mat = new THREE.PointsMaterial({
+        color: 0xffcc22, size: 0.12, transparent: true, opacity: 0.7
+    });
+    const particles = new THREE.Points(geo, mat);
+    scene.add(particles);
+    explosionParticleGroups.push({ particles, velocities, center: pos });
+});
+
+/* ====================================================================
+   BATTLEFIELD EFFECTS: ATTACK LINES (marines -> zerglings)
+   ==================================================================== */
+const attackLineCount = 4;
+const attackLines = [];
+for (let i = 0; i < attackLineCount; i++) {
+    const geo = new THREE.BufferGeometry();
+    const positions = new Float32Array(6); // 2 points
+    geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    const mat = new THREE.LineBasicMaterial({
+        color: i < 2 ? 0x00aaff : 0x44ff88,
+        transparent: true,
+        opacity: 0.6
+    });
+    const line = new THREE.Line(geo, mat);
+    scene.add(line);
+    attackLines.push({ line, geo, flickerPhase: Math.random() * Math.PI * 2 });
+}
+
+/* ====================================================================
+   MINIMAP (canvas 2D)
+   ==================================================================== */
+const minimapCanvas = document.getElementById('minimap');
+const mmCtx = minimapCanvas.getContext('2d');
+
+function drawMinimap() {
+    const w = minimapCanvas.width, h = minimapCanvas.height;
+    mmCtx.fillStyle = 'rgba(0,10,5,1)';
+    mmCtx.fillRect(0, 0, w, h);
+
+    const scale = 4.5;
+    const cx = w / 2, cy = h / 2;
+
+    // Draw hex dots
+    tiles.forEach(t => {
+        const mx = cx + t.worldX * scale / 1.5;
+        const my = cy + t.worldZ * scale / 1.5;
+        const onCreepTile = isCreep(t.q, t.r);
+        mmCtx.fillStyle = onCreepTile ? 'rgba(100,0,40,0.6)' :
+            (t.vis ? 'rgba(0,40,20,0.5)' : 'rgba(15,15,15,0.4)');
+        mmCtx.fillRect(mx - 1, my - 1, 2, 2);
+    });
+
+    // Player base (blue dot)
+    const pb = hexToWorld(playerBase.q, playerBase.r);
+    mmCtx.fillStyle = '#00aaff';
+    mmCtx.beginPath();
+    mmCtx.arc(cx + pb.x * scale / 1.5, cy + pb.z * scale / 1.5, 3, 0, Math.PI * 2);
+    mmCtx.fill();
+
+    // Enemy base (red dot)
+    const eb = hexToWorld(enemyBase.q, enemyBase.r);
+    mmCtx.fillStyle = '#ff3344';
+    mmCtx.beginPath();
+    mmCtx.arc(cx + eb.x * scale / 1.5, cy + eb.z * scale / 1.5, 3, 0, Math.PI * 2);
+    mmCtx.fill();
+
+    // Marine group (blue small dot)
+    mmCtx.fillStyle = '#4488ff';
+    mmCtx.beginPath();
+    mmCtx.arc(cx + 0 * scale / 1.5, cy + hexToWorld(0, 2).z * scale / 1.5, 2, 0, Math.PI * 2);
+    mmCtx.fill();
+
+    // Zergling swarm (red small dot)
+    mmCtx.fillStyle = '#ff4466';
+    mmCtx.beginPath();
+    mmCtx.arc(cx + zerglingSwarmCenter.x * scale / 1.5, cy + zerglingSwarmCenter.z * scale / 1.5, 2, 0, Math.PI * 2);
+    mmCtx.fill();
+
+    // Mineral patches (cyan dots)
+    mineralHexes.forEach(h => {
+        const mp = hexToWorld(h.q, h.r);
+        mmCtx.fillStyle = '#2266ff';
+        mmCtx.fillRect(cx + mp.x * scale / 1.5 - 1, cy + mp.z * scale / 1.5 - 1, 2, 2);
+    });
+
+    // Vespene (green dots)
+    vespeneHexes.forEach(h => {
+        const vp = hexToWorld(h.q, h.r);
+        mmCtx.fillStyle = '#44ff66';
+        mmCtx.fillRect(cx + vp.x * scale / 1.5 - 1, cy + vp.z * scale / 1.5 - 1, 2, 2);
+    });
+}
+
+/* ====================================================================
+   FPS COUNTER
+   ==================================================================== */
+const statsEl = document.getElementById('stats');
+let frameCount = 0, lastFpsTime = performance.now();
+
+/* ====================================================================
+   ANIMATION LOOP
+   ==================================================================== */
+const dummy = new THREE.Matrix4();
+const tmpObj = new THREE.Object3D();
+const clock = new THREE.Clock();
+
+function animate() {
+    requestAnimationFrame(animate);
+    const t = clock.getElapsedTime();
+    const dt = clock.getDelta();
+
+    controls.update();
+
+    /* ── Marines moving along path ─────────────────────────────── */
+    marinePathProgress += 0.0003;
+    if (marinePathProgress >= 1) marinePathProgress -= 1;
+
+    const pathLen = marinePath.length;
+    const totalSegments = pathLen - 1;
+    const rawIdx = marinePathProgress * totalSegments;
+    const segIdx = Math.floor(rawIdx);
+    const segT = rawIdx - segIdx;
+    const segA = marinePath[segIdx % pathLen];
+    const segB = marinePath[(segIdx + 1) % pathLen];
+    const groupX = segA.x + (segB.x - segA.x) * segT;
+    const groupZ = segA.z + (segB.z - segA.z) * segT;
+
+    for (let i = 0; i < MARINE_COUNT; i++) {
+        tmpObj.position.set(
+            groupX + marineFormationOffsets[i].x,
+            0.45,
+            groupZ + marineFormationOffsets[i].z
+        );
+        tmpObj.updateMatrix();
+        marines.setMatrixAt(i, tmpObj.matrix);
+    }
+    marines.instanceMatrix.needsUpdate = true;
+
+    /* ── Zerglings swarm with organic noise ────────────────────── */
+    const swarmDriftX = Math.sin(t * 0.2) * 1.5;
+    const swarmDriftZ = Math.cos(t * 0.15) * 1.0;
+
+    for (let i = 0; i < ZERGLING_COUNT; i++) {
+        const off = zerglingOffsets[i];
+        const nx = Math.sin(t * off.noiseSpeed + off.noisePhase) * off.noiseAmp;
+        const nz = Math.cos(t * off.noiseSpeed * 0.7 + off.noisePhase + 1.3) * off.noiseAmp;
+        tmpObj.position.set(
+            zerglingSwarmCenter.x + off.x + nx + swarmDriftX,
+            0.35,
+            zerglingSwarmCenter.z + off.z + nz + swarmDriftZ
+        );
+        tmpObj.updateMatrix();
+        zerglings.setMatrixAt(i, tmpObj.matrix);
+    }
+    zerglings.instanceMatrix.needsUpdate = true;
+
+    /* ── Mutalisks circling ────────────────────────────────────── */
+    mutalisks.forEach(m => {
+        m.userData.orbitAngle += m.userData.orbitSpeed * 0.01;
+        const ox = Math.cos(m.userData.orbitAngle) * m.userData.orbitRadius;
+        const oz = Math.sin(m.userData.orbitAngle) * m.userData.orbitRadius;
+        m.position.set(ox, m.userData.height + Math.sin(t * 0.5) * 0.3, oz);
+        m.rotation.y = m.userData.orbitAngle + Math.PI;
+    });
+
+    /* ── Mineral crystal rotation ──────────────────────────────── */
+    mineralCrystals.forEach((cluster, idx) => {
+        cluster.rotation.y = t * 0.15 + idx * 0.5;
+    });
+
+    /* ── Vespene particles rising ──────────────────────────────── */
+    vespeneParticleGroups.forEach(group => {
+        const posArr = group.particles.geometry.attributes.position.array;
+        for (let i = 0; i < posArr.length / 3; i++) {
+            posArr[i * 3 + 1] += group.speeds[i] * 0.008;
+            // Drift
+            posArr[i * 3]     += (Math.random() - 0.5) * 0.005;
+            posArr[i * 3 + 2] += (Math.random() - 0.5) * 0.005;
+            // Reset when too high
+            if (posArr[i * 3 + 1] > 3.0) {
+                posArr[i * 3]     = group.baseX + (Math.random() - 0.5) * 0.3;
+                posArr[i * 3 + 1] = 0.5;
+                posArr[i * 3 + 2] = group.baseZ + (Math.random() - 0.5) * 0.3;
+            }
+        }
+        group.particles.geometry.attributes.position.needsUpdate = true;
+    });
+
+    /* ── Factory smoke ─────────────────────────────────────────── */
+    {
+        const posArr = smokeParticles.geometry.attributes.position.array;
+        for (let i = 0; i < smokeCount; i++) {
+            posArr[i * 3 + 1] += smokeSpeeds[i] * 0.005;
+            posArr[i * 3]     += (Math.random() - 0.5) * 0.003;
+            posArr[i * 3 + 2] += (Math.random() - 0.5) * 0.003;
+            if (posArr[i * 3 + 1] > 3.5) {
+                posArr[i * 3]     = fPos.x - 0.4 + (Math.random() - 0.5) * 0.15;
+                posArr[i * 3 + 1] = 1.1;
+                posArr[i * 3 + 2] = fPos.z + 0.2 + (Math.random() - 0.5) * 0.15;
+            }
+        }
+        smokeParticles.geometry.attributes.position.needsUpdate = true;
+    }
+
+    /* ── Spawning pool pulse ───────────────────────────────────── */
+    const pulse = 0.15 + Math.sin(t * 2.0) * 0.1;
+    spawningPoolMat.emissiveIntensity = 0.2 + Math.sin(t * 2.5) * 0.15;
+    poolGlow.material.opacity = pulse;
+
+    /* ── Explosion particles cycling ───────────────────────────── */
+    explosionParticleGroups.forEach(group => {
+        const posArr = group.particles.geometry.attributes.position.array;
+        for (let i = 0; i < group.velocities.length; i++) {
+            const v = group.velocities[i];
+            v.life += 0.008;
+            if (v.life > 1) {
+                v.life = 0;
+                v.x = (Math.random() - 0.5) * 2;
+                v.y = Math.random() * 2;
+                v.z = (Math.random() - 0.5) * 2;
+                posArr[i * 3]     = group.center.x;
+                posArr[i * 3 + 1] = 0.5;
+                posArr[i * 3 + 2] = group.center.z;
+            }
+            posArr[i * 3]     += v.x * 0.01;
+            posArr[i * 3 + 1] += v.y * 0.012;
+            posArr[i * 3 + 2] += v.z * 0.01;
+        }
+        group.particles.geometry.attributes.position.needsUpdate = true;
+        group.particles.material.opacity = 0.4 + Math.sin(t * 4 + group.center.x) * 0.3;
+    });
+
+    /* ── Attack lines flickering ───────────────────────────────── */
+    attackLines.forEach((al, idx) => {
+        const posArr = al.geo.attributes.position.array;
+        // Line from marine group area to zergling swarm area
+        const marineArea = { x: groupX + (idx - 1.5) * 0.5, z: groupZ };
+        posArr[0] = marineArea.x;
+        posArr[1] = 0.5;
+        posArr[2] = marineArea.z;
+        posArr[3] = zerglingSwarmCenter.x + swarmDriftX + (idx - 1.5) * 0.6;
+        posArr[4] = 0.5;
+        posArr[5] = zerglingSwarmCenter.z + swarmDriftZ;
+        al.geo.attributes.position.needsUpdate = true;
+
+        // Flicker
+        const flicker = Math.sin(t * 12 + al.flickerPhase) > 0.2 ? 0.5 : 0.05;
+        al.line.material.opacity = flicker;
+    });
+
+    /* ── Antenna tip blink ─────────────────────────────────────── */
+    ccTip.material.opacity = Math.sin(t * 3) > 0 ? 1.0 : 0.2;
+
+    /* ── RENDER ─────────────────────────────────────────────────── */
+    renderer.render(scene, camera);
+
+    /* ── FPS ────────────────────────────────────────────────────── */
+    frameCount++;
+    const now = performance.now();
+    if (now - lastFpsTime >= 500) {
+        const fps = Math.round(frameCount / ((now - lastFpsTime) / 1000));
+        statsEl.textContent = `FPS: ${fps}`;
+        frameCount = 0;
+        lastFpsTime = now;
+    }
+}
+
+// Draw minimap once then periodically
+drawMinimap();
+setInterval(drawMinimap, 2000);
+
+animate();
+</script>
+</body>
+</html>
