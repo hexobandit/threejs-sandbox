@@ -1,0 +1,1375 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0,user-scalable=no">
+<title>HEXCOM CLASSIC</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+html, body { width:100%; height:100%; overflow:hidden; background:#000; touch-action:none; -webkit-touch-callout:none; -webkit-user-select:none; user-select:none; }
+canvas { display:block; width:100%; height:100%; }
+@keyframes blink { 50% { opacity:0; } }
+#energy { position:fixed;top:12px;left:50%;transform:translateX(-50%);font-family:'Courier New',monospace;font-size:16px;color:#ffcc00;z-index:10;pointer-events:none;text-shadow:0 0 8px #ffcc0044; }
+#waveinfo { position:fixed;top:12px;right:12px;font-family:'Courier New',monospace;font-size:11px;color:#888;z-index:10;pointer-events:none; }
+#hqhp { position:fixed;top:36px;left:50%;transform:translateX(-50%);font-family:'Courier New',monospace;font-size:11px;color:#00ff88;z-index:10;pointer-events:none;white-space:nowrap; }
+#msg { position:fixed;top:12px;left:12px;font-family:'Courier New',monospace;font-size:10px;color:#888;z-index:10;pointer-events:none; }
+#fps { position:fixed;bottom:12px;left:12px;font-family:'Courier New',monospace;font-size:10px;color:#ffcc00;z-index:10;pointer-events:none; }
+#back { position:fixed;bottom:12px;right:12px;font-family:'Courier New',monospace;font-size:10px;color:#00ff88;text-decoration:none;z-index:10; }
+#buildmenu { display:none;position:fixed;bottom:50px;left:50%;transform:translateX(-50%);z-index:15;gap:6px;font-family:'Courier New',monospace; }
+.bbtn { background:#111;color:#fff;border:2px solid #888;padding:8px 12px;border-radius:4px;font-family:inherit;font-size:11px;cursor:pointer;touch-action:manipulation; }
+.bbtn[data-type="wall"] { border-color:#888; }
+.bbtn[data-type="generator"] { border-color:#44ff44; }
+.bbtn[data-type="tower"] { border-color:#00ccff; }
+.bbtn[data-type="barracks"] { border-color:#ff8800; }
+.bbtn:active { background:#333; }
+#sellbtn { display:none;position:fixed;bottom:50px;left:50%;transform:translateX(-50%);z-index:15; }
+#sellbtn button { background:#220000;color:#ff4444;border:2px solid #ff4444;padding:8px 16px;border-radius:4px;font-family:'Courier New',monospace;font-size:11px;cursor:pointer;touch-action:manipulation; }
+#startscreen { position:fixed;inset:0;background:rgba(0,0,0,0.92);z-index:20;display:flex;flex-direction:column;align-items:center;justify-content:center;font-family:'Courier New',monospace;color:#fff; }
+#startscreen h1 { font-size:24px;color:#00ff88;margin-bottom:4px; }
+#startscreen .sub { font-size:16px;color:#00ff88;margin-bottom:16px; }
+#startscreen .inst { font-size:11px;color:#888;margin-bottom:4px; }
+#startscreen .inst:last-of-type { margin-bottom:24px; }
+#startscreen .tap { font-size:14px;color:#00ff88;animation:blink 1s step-end infinite; }
+#gameover { display:none;position:fixed;inset:0;background:rgba(0,0,0,0.92);z-index:20;flex-direction:column;align-items:center;justify-content:center;font-family:'Courier New',monospace;color:#fff; }
+#gameover h1 { font-size:24px;color:#ff4444;margin-bottom:8px; }
+#finalwave { font-size:14px;color:#888;margin-bottom:24px; }
+#gameover .tap { font-size:12px;color:#888;animation:blink 1s step-end infinite; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<div id="energy"></div>
+<div id="waveinfo"></div>
+<div id="hqhp"></div>
+<div id="msg"></div>
+<div id="fps">-- FPS</div>
+<a id="back" href="../index.html">&larr; back</a>
+
+<div id="buildmenu">
+    <button class="bbtn" data-type="wall">&#x1f9f1; Wall 10&#9889;</button>
+    <button class="bbtn" data-type="generator">&#9889; Gen 25&#9889;</button>
+    <button class="bbtn" data-type="tower">&#x1f5fc; Twr 30&#9889;</button>
+    <button class="bbtn" data-type="barracks">&#9876; Brk 40&#9889;</button>
+</div>
+
+<div id="sellbtn">
+    <button id="sellaction">SELL (50%)</button>
+</div>
+
+<div id="startscreen">
+    <h1>HEXCOM</h1>
+    <p class="sub">CLASSIC</p>
+    <p class="inst">TAP HEX &rarr; SELECT BUILDING &rarr; TAP TO PLACE</p>
+    <p class="inst">WALLS &middot; GENERATORS &middot; TOWERS &middot; BARRACKS</p>
+    <p class="inst">DEFEND YOUR HQ FROM WAVES OF ENEMIES</p>
+    <p class="tap">TAP TO START</p>
+</div>
+
+<div id="gameover">
+    <h1>HQ DESTROYED</h1>
+    <p id="finalwave">SURVIVED 0 WAVES</p>
+    <p class="tap">TAP TO RETRY</p>
+</div>
+
+<script>
+'use strict';
+
+// ===== CANVAS SETUP =====
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const DPR = Math.min(window.devicePixelRatio || 1, 2);
+let W, H;
+
+function resize() {
+    W = window.innerWidth;
+    H = window.innerHeight;
+    canvas.width = W * DPR;
+    canvas.height = H * DPR;
+    canvas.style.width = W + 'px';
+    canvas.style.height = H + 'px';
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+}
+window.addEventListener('resize', resize);
+resize();
+
+// ===== HEX GRID CONSTANTS =====
+const HEX_SIZE = 28;
+const GAP = 2;
+const S = HEX_SIZE + GAP;
+const GRID_RADIUS = 7;
+const HQ_Q = 0, HQ_R = 5;
+
+const HEX_DIRS = [{q:1,r:0},{q:0,r:1},{q:-1,r:1},{q:-1,r:0},{q:0,r:-1},{q:1,r:-1}];
+
+function hexToPixel(q, r) {
+    return {
+        x: S * 1.5 * q,
+        y: S * Math.sqrt(3) * (r + q / 2)
+    };
+}
+
+function hexDist(q1, r1, q2, r2) {
+    const dq = q1 - q2, dr = r1 - r2;
+    return Math.max(Math.abs(dq), Math.abs(dr), Math.abs(dq + dr));
+}
+
+function hexRound(q, r) {
+    const s = -q - r;
+    let rq = Math.round(q), rr = Math.round(r), rs = Math.round(s);
+    const dq = Math.abs(rq - q), dr = Math.abs(rr - r), ds = Math.abs(rs - s);
+    if (dq > dr && dq > ds) rq = -rr - rs;
+    else if (dr > ds) rr = -rq - rs;
+    return { q: rq, r: rr };
+}
+
+function hexKey(q, r) { return q + ',' + r; }
+
+function isValidHex(q, r) {
+    return hexDist(q, r, 0, 0) <= GRID_RADIUS;
+}
+
+// ===== CAMERA =====
+let cam = { x: 0, y: 80, zoom: 1.8 };
+const CAM_ZOOM_MIN = 0.6;
+const CAM_ZOOM_MAX = 4.0;
+
+function screenToWorld(sx, sy) {
+    return {
+        x: (sx - W / 2) / cam.zoom + cam.x,
+        y: (sy - H / 2) / cam.zoom + cam.y
+    };
+}
+
+function screenToHex(sx, sy) {
+    const w = screenToWorld(sx, sy);
+    const q = (2 / 3 * w.x) / S;
+    const r = (-1 / 3 * w.x + Math.sqrt(3) / 3 * w.y) / S;
+    return hexRound(q, r);
+}
+
+// ===== GAME STATE =====
+const COSTS = { wall: 10, generator: 25, tower: 30, barracks: 40 };
+const SELL_RATIO = 0.5;
+
+let gameState = 'START'; // START, PLAYING, GAME_OVER
+let grid = {};       // key -> { type, hp, maxHp, ... }
+let enemies = [];
+let soldiers = [];
+let shots = [];      // visual shot lines
+let particles = [];
+let energy = 100;
+let energyRegen = 2; // per second
+let wave = 0;
+let waveTimer = 0;
+let waveCountdown = 20;
+let wavesCompleted = 0;
+let enemiesInWave = 0;
+let enemiesSpawned = 0;
+let spawnQueue = [];
+let spawnTimer = 0;
+let selectedHex = null;
+let buildMode = null; // null or building type string
+let hoverHex = null;
+let lastTime = 0;
+let gameTime = 0;
+let radarAngle = 0;
+let waveAnnounce = { text: '', timer: 0 };
+
+// FPS counter
+let fpsFrames = 0, fpsTime = 0, fpsDisplay = '--';
+
+// ===== GRID SETUP =====
+function initGrid() {
+    grid = {};
+    for (let q = -GRID_RADIUS; q <= GRID_RADIUS; q++) {
+        for (let r = Math.max(-GRID_RADIUS, -q - GRID_RADIUS); r <= Math.min(GRID_RADIUS, -q + GRID_RADIUS); r++) {
+            // Mark all hexes as part of grid (empty by default)
+        }
+    }
+    // Place HQ
+    grid[hexKey(HQ_Q, HQ_R)] = { type: 'hq', hp: 20, maxHp: 20 };
+}
+
+// ===== BFS PATHFINDING =====
+function bfs(startQ, startR, goalQ, goalR) {
+    const queue = [{ q: startQ, r: startR }];
+    const came_from = {};
+    const startK = hexKey(startQ, startR);
+    came_from[startK] = null;
+
+    while (queue.length > 0) {
+        const current = queue.shift();
+        if (current.q === goalQ && current.r === goalR) {
+            const path = [];
+            let key = hexKey(current.q, current.r);
+            while (came_from[key]) {
+                path.unshift(came_from[key]);
+                key = hexKey(came_from[key].q, came_from[key].r);
+            }
+            path.push({ q: goalQ, r: goalR });
+            return path;
+        }
+
+        for (const dir of HEX_DIRS) {
+            const nq = current.q + dir.q;
+            const nr = current.r + dir.r;
+            const nKey = hexKey(nq, nr);
+            if (came_from[nKey] !== undefined) continue;
+            if (!isValidHex(nq, nr)) continue;
+            const cell = grid[nKey];
+            if (cell && cell.type === 'wall') continue;
+            if (cell && cell.type !== 'hq') continue; // can't walk through other buildings
+            came_from[nKey] = { q: current.q, r: current.r };
+            queue.push({ q: nq, r: nr });
+        }
+    }
+    return null;
+}
+
+// ===== DRAWING HELPERS =====
+function drawHexPath(cx, cy, size) {
+    ctx.beginPath();
+    for (let i = 0; i < 6; i++) {
+        const angle = Math.PI / 180 * (60 * i);
+        const px = cx + size * Math.cos(angle);
+        const py = cy + size * Math.sin(angle);
+        if (i === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+    }
+    ctx.closePath();
+}
+
+function worldToScreen(wx, wy) {
+    return {
+        x: (wx - cam.x) * cam.zoom + W / 2,
+        y: (wy - cam.y) * cam.zoom + H / 2
+    };
+}
+
+function isHexOnScreen(px, py) {
+    const s = worldToScreen(px, py);
+    const margin = HEX_SIZE * cam.zoom + 20;
+    return s.x > -margin && s.x < W + margin && s.y > -margin && s.y < H + margin;
+}
+
+// ===== WAVE SYSTEM =====
+function getWaveEnemies(w) {
+    const list = [];
+    if (w <= 0) return list;
+    // Grunts
+    const gruntCount = Math.min(2 + w * 2, 15);
+    for (let i = 0; i < gruntCount; i++) list.push('grunt');
+    // Tanks (wave 3+)
+    if (w >= 3) {
+        const tankCount = Math.min(w - 2, 5);
+        for (let i = 0; i < tankCount; i++) list.push('tank');
+    }
+    // Speed (wave 5+)
+    if (w >= 5) {
+        const speedCount = Math.min(w - 3, 6);
+        for (let i = 0; i < speedCount; i++) list.push('speed');
+    }
+    return list;
+}
+
+function getSpawnHexes() {
+    const hexes = [];
+    for (let q = -GRID_RADIUS; q <= GRID_RADIUS; q++) {
+        for (let r = Math.max(-GRID_RADIUS, -q - GRID_RADIUS); r <= Math.min(GRID_RADIUS, -q + GRID_RADIUS); r++) {
+            if (r <= -5 && !grid[hexKey(q, r)]) {
+                hexes.push({ q, r });
+            }
+        }
+    }
+    return hexes;
+}
+
+function startWave() {
+    wave++;
+    const enemies_list = getWaveEnemies(wave);
+    spawnQueue = enemies_list;
+    enemiesSpawned = 0;
+    enemiesInWave = enemies_list.length;
+    spawnTimer = 0;
+    waveAnnounce = { text: 'WAVE ' + wave, timer: 2 };
+}
+
+const ENEMY_STATS = {
+    grunt: { hp: 3, speed: 1, reward: 5 },
+    tank:  { hp: 8, speed: 0.5, reward: 15 },
+    speed: { hp: 1, speed: 2, reward: 8 }
+};
+
+function spawnEnemy(type) {
+    if (enemies.length >= 30) return;
+    const spawns = getSpawnHexes();
+    if (spawns.length === 0) return;
+    const spawn = spawns[Math.floor(Math.random() * spawns.length)];
+    const path = bfs(spawn.q, spawn.r, HQ_Q, HQ_R);
+    if (!path) return; // no path available
+    const stats = ENEMY_STATS[type];
+    const pos = hexToPixel(spawn.q, spawn.r);
+    enemies.push({
+        type,
+        q: spawn.q, r: spawn.r,
+        worldX: pos.x, worldY: pos.y,
+        hp: stats.hp, maxHp: stats.hp,
+        speed: stats.speed,
+        reward: stats.reward,
+        path: path,
+        pathIndex: 0,
+        moveProgress: 0,
+        dead: false
+    });
+}
+
+// ===== SOLDIERS =====
+function spawnSoldier(barracksQ, barracksR) {
+    const pos = hexToPixel(barracksQ, barracksR);
+    soldiers.push({
+        fromQ: barracksQ, fromR: barracksR,
+        q: barracksQ, r: barracksR,
+        worldX: pos.x, worldY: pos.y,
+        hp: 2, maxHp: 2,
+        target: null,
+        attackTimer: 0,
+        dead: false,
+        path: null,
+        pathIndex: 0,
+        moveProgress: 0
+    });
+}
+
+// ===== PARTICLES =====
+function addParticles(wx, wy, color, count) {
+    for (let i = 0; i < count && particles.length < 30; i++) {
+        const angle = Math.random() * Math.PI * 2;
+        const speed = 30 + Math.random() * 50;
+        particles.push({
+            x: wx, y: wy,
+            vx: Math.cos(angle) * speed,
+            vy: Math.sin(angle) * speed,
+            life: 0.4 + Math.random() * 0.3,
+            color: color,
+            size: 2 + Math.random() * 2
+        });
+    }
+}
+
+// ===== BUILDING PLACEMENT =====
+function placeBuilding(q, r, type) {
+    if (!isValidHex(q, r)) return false;
+    const key = hexKey(q, r);
+    if (grid[key]) return false;
+    if (energy < COSTS[type]) return false;
+
+    // Temporarily place to test pathability
+    grid[key] = { type: type, hp: 1 };
+    // Check if HQ is still reachable from all spawn hexes
+    const spawns = getSpawnHexes();
+    let blocked = false;
+    if (spawns.length > 0) {
+        // Quick check from one spawn hex
+        const testPath = bfs(spawns[0].q, spawns[0].r, HQ_Q, HQ_R);
+        if (!testPath) blocked = true;
+    }
+    if (blocked) {
+        delete grid[key];
+        return false;
+    }
+
+    // Actually place
+    const hpMap = { wall: 8, generator: 5, tower: 5, barracks: 6 };
+    grid[key] = {
+        type,
+        hp: hpMap[type],
+        maxHp: hpMap[type],
+        timer: 0, // for generators and barracks
+        soldierAlive: false
+    };
+
+    energy -= COSTS[type];
+
+    // Recalculate paths for all enemies
+    for (const e of enemies) {
+        if (e.dead) continue;
+        const currentHex = hexRound(
+            (2 / 3 * e.worldX) / S,
+            (-1 / 3 * e.worldX + Math.sqrt(3) / 3 * e.worldY) / S
+        );
+        const newPath = bfs(currentHex.q, currentHex.r, HQ_Q, HQ_R);
+        if (newPath) {
+            e.path = newPath;
+            e.pathIndex = 0;
+            e.q = currentHex.q;
+            e.r = currentHex.r;
+            e.moveProgress = 0;
+        }
+    }
+
+    return true;
+}
+
+function sellBuilding(q, r) {
+    const key = hexKey(q, r);
+    const bld = grid[key];
+    if (!bld || bld.type === 'hq') return;
+    const refund = Math.floor(COSTS[bld.type] * SELL_RATIO);
+    energy += refund;
+    // Kill associated soldier
+    if (bld.type === 'barracks') {
+        for (const s of soldiers) {
+            if (s.fromQ === q && s.fromR === r) s.dead = true;
+        }
+    }
+    delete grid[key];
+    // Recalculate enemy paths
+    for (const e of enemies) {
+        if (e.dead) continue;
+        const newPath = bfs(e.q, e.r, HQ_Q, HQ_R);
+        if (newPath) {
+            e.path = newPath;
+            e.pathIndex = 0;
+            e.moveProgress = 0;
+        }
+    }
+}
+
+// ===== UPDATE =====
+function update(dt) {
+    if (gameState !== 'PLAYING') return;
+    gameTime += dt;
+    radarAngle += dt * 0.5;
+
+    // Energy regen
+    energy += energyRegen * dt;
+
+    // Wave timer
+    if (spawnQueue.length === 0 && enemies.length === 0 && wave > 0) {
+        wavesCompleted = wave;
+    }
+    if (spawnQueue.length === 0 && enemies.length === 0) {
+        waveTimer += dt;
+        waveCountdown = Math.max(0, 20 - waveTimer);
+        if (waveTimer >= 20) {
+            waveTimer = 0;
+            startWave();
+        }
+    }
+
+    // Spawn enemies from queue
+    if (spawnQueue.length > 0) {
+        spawnTimer += dt;
+        if (spawnTimer >= 0.6) {
+            spawnTimer = 0;
+            const type = spawnQueue.shift();
+            spawnEnemy(type);
+        }
+    }
+
+    // Update enemies
+    for (const e of enemies) {
+        if (e.dead) continue;
+        if (!e.path || e.pathIndex >= e.path.length) {
+            // Attack HQ
+            const hq = grid[hexKey(HQ_Q, HQ_R)];
+            if (hq && hexDist(e.q, e.r, HQ_Q, HQ_R) <= 1) {
+                hq.hp -= e.speed * dt;
+                if (hq.hp <= 0) {
+                    gameState = 'GAME_OVER';
+                    document.getElementById('gameover').style.display = 'flex';
+                    document.getElementById('finalwave').textContent = 'SURVIVED ' + wavesCompleted + ' WAVES';
+                    hideMenus();
+                }
+            }
+            continue;
+        }
+
+        const target = e.path[e.pathIndex];
+        const fromPos = hexToPixel(e.q, e.r);
+        const toPos = hexToPixel(target.q, target.r);
+
+        e.moveProgress += e.speed * dt;
+        if (e.moveProgress >= 1) {
+            e.moveProgress = 0;
+            e.q = target.q;
+            e.r = target.r;
+            e.worldX = toPos.x;
+            e.worldY = toPos.y;
+            e.pathIndex++;
+
+            // Attack buildings in the way
+            const cellKey = hexKey(e.q, e.r);
+            const cell = grid[cellKey];
+            if (cell && cell.type !== 'hq') {
+                // destroy non-wall buildings, damage walls
+                cell.hp -= 1;
+                if (cell.hp <= 0) {
+                    if (cell.type === 'barracks') {
+                        for (const s of soldiers) {
+                            if (s.fromQ === e.q && s.fromR === e.r) s.dead = true;
+                        }
+                    }
+                    delete grid[cellKey];
+                    addParticles(toPos.x, toPos.y, '#ffffff', 3);
+                }
+            }
+        } else {
+            e.worldX = fromPos.x + (toPos.x - fromPos.x) * e.moveProgress;
+            e.worldY = fromPos.y + (toPos.y - fromPos.y) * e.moveProgress;
+        }
+    }
+
+    // Update buildings
+    for (const key in grid) {
+        const bld = grid[key];
+        if (!bld) continue;
+        const [bq, br] = key.split(',').map(Number);
+
+        if (bld.type === 'generator') {
+            bld.timer = (bld.timer || 0) + dt;
+            if (bld.timer >= 5) {
+                bld.timer = 0;
+                energy += 5;
+            }
+        }
+
+        if (bld.type === 'tower') {
+            bld.timer = (bld.timer || 0) + dt;
+            if (bld.timer >= 1.5) {
+                // Find nearest enemy in range
+                let nearest = null, nearDist = Infinity;
+                for (const e of enemies) {
+                    if (e.dead) continue;
+                    const d = hexDist(bq, br, e.q, e.r);
+                    if (d <= 3 && d < nearDist) {
+                        nearDist = d;
+                        nearest = e;
+                    }
+                }
+                if (nearest) {
+                    bld.timer = 0;
+                    nearest.hp -= 1;
+                    const tPos = hexToPixel(bq, br);
+                    shots.push({
+                        x1: tPos.x, y1: tPos.y,
+                        x2: nearest.worldX, y2: nearest.worldY,
+                        life: 0.15
+                    });
+                    if (nearest.hp <= 0) {
+                        nearest.dead = true;
+                        energy += nearest.reward;
+                        addParticles(nearest.worldX, nearest.worldY, '#ff4444', 4);
+                    }
+                }
+            }
+        }
+
+        if (bld.type === 'barracks') {
+            // Check if soldier is alive
+            let hasSoldier = false;
+            for (const s of soldiers) {
+                if (!s.dead && s.fromQ === bq && s.fromR === br) {
+                    hasSoldier = true;
+                    break;
+                }
+            }
+            if (!hasSoldier) {
+                bld.timer = (bld.timer || 0) + dt;
+                if (bld.timer >= 10) {
+                    bld.timer = 0;
+                    spawnSoldier(bq, br);
+                }
+            }
+        }
+    }
+
+    // Update soldiers
+    for (const s of soldiers) {
+        if (s.dead) continue;
+
+        // Find nearest enemy
+        let nearest = null, nearDist = Infinity;
+        for (const e of enemies) {
+            if (e.dead) continue;
+            const d = hexDist(s.q, s.r, e.q, e.r);
+            if (d < nearDist) {
+                nearDist = d;
+                nearest = e;
+            }
+        }
+
+        if (nearest) {
+            if (nearDist <= 1) {
+                // Attack
+                s.attackTimer += dt;
+                if (s.attackTimer >= 1) {
+                    s.attackTimer = 0;
+                    nearest.hp -= 1;
+                    if (nearest.hp <= 0) {
+                        nearest.dead = true;
+                        energy += nearest.reward;
+                        addParticles(nearest.worldX, nearest.worldY, '#ff4444', 4);
+                    }
+                }
+            } else {
+                // Move toward enemy
+                const path = bfs(s.q, s.r, nearest.q, nearest.r);
+                if (path && path.length > 0) {
+                    // Move one step
+                    s.moveProgress += 1.5 * dt;
+                    const nextHex = path[0];
+                    const fromPos = hexToPixel(s.q, s.r);
+                    const toPos = hexToPixel(nextHex.q, nextHex.r);
+                    if (s.moveProgress >= 1) {
+                        s.moveProgress = 0;
+                        s.q = nextHex.q;
+                        s.r = nextHex.r;
+                        s.worldX = toPos.x;
+                        s.worldY = toPos.y;
+                    } else {
+                        s.worldX = fromPos.x + (toPos.x - fromPos.x) * s.moveProgress;
+                        s.worldY = fromPos.y + (toPos.y - fromPos.y) * s.moveProgress;
+                    }
+                }
+            }
+        } else {
+            // Return to barracks
+            const homePos = hexToPixel(s.fromQ, s.fromR);
+            s.worldX += (homePos.x - s.worldX) * dt * 2;
+            s.worldY += (homePos.y - s.worldY) * dt * 2;
+            s.q = s.fromQ;
+            s.r = s.fromR;
+        }
+
+        // Check if soldier gets attacked by adjacent enemies
+        for (const e of enemies) {
+            if (e.dead) continue;
+            const d = hexDist(s.q, s.r, e.q, e.r);
+            if (d <= 1) {
+                s.hp -= 0.3 * dt; // enemies slowly damage soldiers
+                if (s.hp <= 0) {
+                    s.dead = true;
+                    addParticles(s.worldX, s.worldY, '#00ff88', 3);
+                    break;
+                }
+            }
+        }
+    }
+
+    // Clean up dead enemies
+    enemies = enemies.filter(e => !e.dead);
+    soldiers = soldiers.filter(s => !s.dead);
+
+    // Update shots
+    for (const sh of shots) {
+        sh.life -= dt;
+    }
+    shots = shots.filter(sh => sh.life > 0);
+
+    // Update particles
+    for (const p of particles) {
+        p.x += p.vx * dt;
+        p.y += p.vy * dt;
+        p.life -= dt;
+        p.size *= 0.97;
+    }
+    particles = particles.filter(p => p.life > 0);
+
+    // Wave announce
+    if (waveAnnounce.timer > 0) {
+        waveAnnounce.timer -= dt;
+    }
+}
+
+// ===== RENDER =====
+function render() {
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    // Clear
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(0, 0, W, H);
+
+    // Camera transform
+    ctx.save();
+    ctx.translate(W / 2, H / 2);
+    ctx.scale(cam.zoom, cam.zoom);
+    ctx.translate(-cam.x, -cam.y);
+
+    // Draw hex grid
+    for (let q = -GRID_RADIUS; q <= GRID_RADIUS; q++) {
+        for (let r = Math.max(-GRID_RADIUS, -q - GRID_RADIUS); r <= Math.min(GRID_RADIUS, -q + GRID_RADIUS); r++) {
+            const pos = hexToPixel(q, r);
+            if (!isHexOnScreen(pos.x, pos.y)) continue;
+
+            const key = hexKey(q, r);
+            const bld = grid[key];
+
+            // Draw hex fill
+            drawHexPath(pos.x, pos.y, HEX_SIZE);
+            ctx.fillStyle = '#0a0a0a';
+            ctx.fill();
+
+            // Border
+            ctx.strokeStyle = '#1a1a1a';
+            ctx.lineWidth = 1;
+            ctx.stroke();
+
+            // Draw building
+            if (bld) {
+                drawBuilding(pos.x, pos.y, bld, q, r);
+            }
+
+            // Selection ring
+            if (selectedHex && selectedHex.q === q && selectedHex.r === r && !buildMode) {
+                drawHexPath(pos.x, pos.y, HEX_SIZE + 2);
+                ctx.strokeStyle = '#ffffff';
+                ctx.lineWidth = 2 + Math.sin(gameTime * 6) * 0.5;
+                ctx.stroke();
+            }
+        }
+    }
+
+    // Build mode ghost
+    if (buildMode && hoverHex && isValidHex(hoverHex.q, hoverHex.r) && !grid[hexKey(hoverHex.q, hoverHex.r)]) {
+        const pos = hexToPixel(hoverHex.q, hoverHex.r);
+        ctx.globalAlpha = 0.4;
+        drawBuildingPreview(pos.x, pos.y, buildMode);
+        ctx.globalAlpha = 1;
+    }
+
+    // Draw enemies
+    for (const e of enemies) {
+        if (e.dead) continue;
+        drawEnemy(e);
+    }
+
+    // Draw soldiers
+    for (const s of soldiers) {
+        if (s.dead) continue;
+        drawSoldier(s);
+    }
+
+    // Draw shots
+    for (const sh of shots) {
+        const alpha = sh.life / 0.15;
+        ctx.save();
+        ctx.shadowColor = '#00ccff';
+        ctx.shadowBlur = 8;
+        ctx.strokeStyle = 'rgba(0, 204, 255, ' + alpha + ')';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(sh.x1, sh.y1);
+        ctx.lineTo(sh.x2, sh.y2);
+        ctx.stroke();
+        ctx.restore();
+    }
+
+    // Draw particles
+    for (const p of particles) {
+        ctx.fillStyle = p.color;
+        ctx.globalAlpha = Math.max(0, p.life / 0.7);
+        ctx.fillRect(p.x - p.size / 2, p.y - p.size / 2, p.size, p.size);
+    }
+    ctx.globalAlpha = 1;
+
+    // Radar sweep
+    const hqPos = hexToPixel(HQ_Q, HQ_R);
+    ctx.save();
+    ctx.globalAlpha = 0.06;
+    ctx.strokeStyle = '#00ff88';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(hqPos.x, hqPos.y);
+    ctx.lineTo(
+        hqPos.x + Math.cos(radarAngle) * 300,
+        hqPos.y + Math.sin(radarAngle) * 300
+    );
+    ctx.stroke();
+    ctx.restore();
+
+    ctx.restore(); // end camera transform
+
+    // Scanlines (screen space)
+    ctx.fillStyle = 'rgba(0,0,0,0.03)';
+    for (let y = 0; y < H; y += 4) {
+        ctx.fillRect(0, y, W, 2);
+    }
+
+    // Vignette
+    const vignette = ctx.createRadialGradient(W / 2, H / 2, W * 0.3, W / 2, H / 2, W * 0.8);
+    vignette.addColorStop(0, 'rgba(0,0,0,0)');
+    vignette.addColorStop(1, 'rgba(0,0,0,0.4)');
+    ctx.fillStyle = vignette;
+    ctx.fillRect(0, 0, W, H);
+
+    // Wave announcement
+    if (waveAnnounce.timer > 0) {
+        ctx.save();
+        ctx.globalAlpha = Math.min(1, waveAnnounce.timer);
+        ctx.font = 'bold 32px "Courier New", monospace';
+        ctx.fillStyle = '#00ff88';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.shadowColor = '#00ff88';
+        ctx.shadowBlur = 20;
+        ctx.fillText(waveAnnounce.text, W / 2, H / 2 - 40);
+        ctx.restore();
+    }
+
+    // Build mode indicator
+    if (buildMode) {
+        ctx.save();
+        ctx.font = '12px "Courier New", monospace';
+        ctx.fillStyle = '#ffcc00';
+        ctx.textAlign = 'center';
+        ctx.fillText('TAP HEX TO PLACE ' + buildMode.toUpperCase(), W / 2, H - 90);
+        ctx.restore();
+    }
+
+    // Update HUD
+    updateHUD();
+}
+
+function drawBuilding(cx, cy, bld, q, r) {
+    const type = bld.type;
+
+    if (type === 'hq') {
+        ctx.save();
+        ctx.shadowColor = '#00ff88';
+        ctx.shadowBlur = 15;
+        drawHexPath(cx, cy, HEX_SIZE - 2);
+        ctx.fillStyle = '#003311';
+        ctx.fill();
+        ctx.strokeStyle = '#00ff88';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+        ctx.shadowBlur = 0;
+        ctx.font = 'bold 12px "Courier New", monospace';
+        ctx.fillStyle = '#00ff88';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('HQ', cx, cy);
+        // HP bar
+        const hpRatio = bld.hp / bld.maxHp;
+        ctx.fillStyle = '#003300';
+        ctx.fillRect(cx - 14, cy - 18, 28, 3);
+        ctx.fillStyle = hpRatio > 0.5 ? '#00ff88' : (hpRatio > 0.25 ? '#ffcc00' : '#ff4444');
+        ctx.fillRect(cx - 14, cy - 18, 28 * hpRatio, 3);
+        ctx.restore();
+        return;
+    }
+
+    if (type === 'wall') {
+        drawHexPath(cx, cy, HEX_SIZE - 2);
+        ctx.fillStyle = '#1a1a1a';
+        ctx.fill();
+        ctx.strokeStyle = '#666666';
+        ctx.lineWidth = 3;
+        ctx.stroke();
+        // HP bar
+        const hpRatio = bld.hp / bld.maxHp;
+        ctx.fillStyle = '#333';
+        ctx.fillRect(cx - 10, cy - 16, 20, 2);
+        ctx.fillStyle = '#888';
+        ctx.fillRect(cx - 10, cy - 16, 20 * hpRatio, 2);
+        return;
+    }
+
+    if (type === 'generator') {
+        const pulse = 0.8 + 0.2 * Math.sin(gameTime * 3);
+        drawHexPath(cx, cy, HEX_SIZE - 2);
+        ctx.fillStyle = 'rgba(0, 50, 0, ' + pulse + ')';
+        ctx.fill();
+        ctx.strokeStyle = '#44ff44';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+        ctx.font = '14px "Courier New", monospace';
+        ctx.fillStyle = '#44ff44';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('\u26A1', cx, cy);
+        // Timer indicator
+        const progress = (bld.timer || 0) / 5;
+        ctx.strokeStyle = 'rgba(68,255,68,0.3)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.arc(cx, cy, HEX_SIZE - 6, -Math.PI / 2, -Math.PI / 2 + progress * Math.PI * 2);
+        ctx.stroke();
+        return;
+    }
+
+    if (type === 'tower') {
+        drawHexPath(cx, cy, HEX_SIZE - 2);
+        ctx.fillStyle = '#001122';
+        ctx.fill();
+        ctx.strokeStyle = '#00ccff';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+        // Crosshair
+        ctx.strokeStyle = '#00ccff';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.arc(cx, cy, 6, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(cx - 9, cy); ctx.lineTo(cx + 9, cy);
+        ctx.moveTo(cx, cy - 9); ctx.lineTo(cx, cy + 9);
+        ctx.stroke();
+        // Range indicator (subtle)
+        ctx.strokeStyle = 'rgba(0,204,255,0.05)';
+        ctx.beginPath();
+        ctx.arc(cx, cy, 3 * S, 0, Math.PI * 2);
+        ctx.stroke();
+        return;
+    }
+
+    if (type === 'barracks') {
+        drawHexPath(cx, cy, HEX_SIZE - 2);
+        ctx.fillStyle = '#1a0d00';
+        ctx.fill();
+        ctx.strokeStyle = '#ff8800';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+        ctx.font = '13px "Courier New", monospace';
+        ctx.fillStyle = '#ff8800';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('\u2694', cx, cy);
+        // Spawn timer
+        let hasSoldier = false;
+        for (const s of soldiers) {
+            if (!s.dead && s.fromQ === q && s.fromR === r) hasSoldier = true;
+        }
+        if (!hasSoldier) {
+            const progress = (bld.timer || 0) / 10;
+            ctx.strokeStyle = 'rgba(255,136,0,0.3)';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.arc(cx, cy, HEX_SIZE - 6, -Math.PI / 2, -Math.PI / 2 + progress * Math.PI * 2);
+            ctx.stroke();
+        }
+        return;
+    }
+}
+
+function drawBuildingPreview(cx, cy, type) {
+    const colors = { wall: '#666', generator: '#44ff44', tower: '#00ccff', barracks: '#ff8800' };
+    drawHexPath(cx, cy, HEX_SIZE - 2);
+    ctx.fillStyle = 'rgba(0,0,0,0.3)';
+    ctx.fill();
+    ctx.strokeStyle = colors[type] || '#fff';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+}
+
+function drawEnemy(e) {
+    ctx.save();
+    ctx.shadowColor = '#ff0000';
+    ctx.shadowBlur = 6;
+
+    const sz = e.type === 'tank' ? 8 : (e.type === 'speed' ? 4 : 6);
+
+    if (e.type === 'grunt') {
+        ctx.fillStyle = '#ff2222';
+        ctx.beginPath();
+        ctx.arc(e.worldX, e.worldY, sz, 0, Math.PI * 2);
+        ctx.fill();
+    } else if (e.type === 'tank') {
+        ctx.fillStyle = '#cc0000';
+        ctx.fillRect(e.worldX - sz, e.worldY - sz, sz * 2, sz * 2);
+    } else if (e.type === 'speed') {
+        ctx.fillStyle = '#ff6666';
+        ctx.beginPath();
+        ctx.moveTo(e.worldX, e.worldY - sz);
+        ctx.lineTo(e.worldX + sz, e.worldY);
+        ctx.lineTo(e.worldX, e.worldY + sz);
+        ctx.lineTo(e.worldX - sz, e.worldY);
+        ctx.closePath();
+        ctx.fill();
+    }
+
+    ctx.shadowBlur = 0;
+
+    // HP bar
+    const hpRatio = e.hp / e.maxHp;
+    const barW = sz * 2 + 4;
+    ctx.fillStyle = '#330000';
+    ctx.fillRect(e.worldX - barW / 2, e.worldY - sz - 6, barW, 2);
+    ctx.fillStyle = '#ff4444';
+    ctx.fillRect(e.worldX - barW / 2, e.worldY - sz - 6, barW * hpRatio, 2);
+
+    ctx.restore();
+}
+
+function drawSoldier(s) {
+    ctx.fillStyle = '#00ff88';
+    ctx.beginPath();
+    ctx.arc(s.worldX, s.worldY, 4, 0, Math.PI * 2);
+    ctx.fill();
+    // Tiny sword
+    ctx.strokeStyle = '#00ff88';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(s.worldX + 3, s.worldY - 5);
+    ctx.lineTo(s.worldX + 3, s.worldY + 1);
+    ctx.stroke();
+    // HP bar
+    const hpRatio = s.hp / s.maxHp;
+    ctx.fillStyle = '#003300';
+    ctx.fillRect(s.worldX - 5, s.worldY - 9, 10, 2);
+    ctx.fillStyle = '#00ff88';
+    ctx.fillRect(s.worldX - 5, s.worldY - 9, 10 * hpRatio, 2);
+}
+
+function updateHUD() {
+    document.getElementById('energy').textContent = '\u26A1 ' + Math.floor(energy);
+
+    const hq = grid[hexKey(HQ_Q, HQ_R)];
+    if (hq) {
+        const bars = Math.max(0, Math.round(hq.hp));
+        const full = '\u2588'.repeat(bars);
+        const empty = '\u2591'.repeat(Math.max(0, hq.maxHp - bars));
+        document.getElementById('hqhp').textContent = 'HQ: ' + full + empty + ' ' + Math.max(0, Math.ceil(hq.hp)) + '/' + hq.maxHp;
+    }
+
+    if (spawnQueue.length === 0 && enemies.length === 0) {
+        document.getElementById('waveinfo').textContent = 'WAVE ' + (wave + 1) + ' \u00B7 NEXT: ' + Math.ceil(waveCountdown) + 's';
+    } else {
+        document.getElementById('waveinfo').textContent = 'WAVE ' + wave + ' \u00B7 ENEMIES: ' + enemies.length;
+    }
+}
+
+// ===== INPUT HANDLING =====
+let touchStartX = 0, touchStartY = 0;
+let touchMoved = false;
+let isDragging = false;
+let pinchStartDist = 0;
+let pinchStartZoom = 0;
+let mouseDown = false;
+let mouseStartX = 0, mouseStartY = 0;
+
+function hideMenus() {
+    document.getElementById('buildmenu').style.display = 'none';
+    document.getElementById('sellbtn').style.display = 'none';
+    document.getElementById('msg').textContent = '';
+}
+
+function handleTap(sx, sy) {
+    if (gameState !== 'PLAYING') return;
+
+    const hex = screenToHex(sx, sy);
+
+    if (buildMode) {
+        // Try to place building
+        if (isValidHex(hex.q, hex.r) && !grid[hexKey(hex.q, hex.r)]) {
+            if (placeBuilding(hex.q, hex.r, buildMode)) {
+                buildMode = null;
+                selectedHex = null;
+                document.getElementById('msg').textContent = '';
+            } else {
+                document.getElementById('msg').textContent = 'CANNOT PLACE HERE';
+                setTimeout(() => {
+                    if (!buildMode) document.getElementById('msg').textContent = '';
+                }, 1500);
+            }
+        } else {
+            // Cancel build mode
+            buildMode = null;
+            selectedHex = null;
+            document.getElementById('msg').textContent = '';
+        }
+        hideMenus();
+        return;
+    }
+
+    if (!isValidHex(hex.q, hex.r)) {
+        selectedHex = null;
+        hideMenus();
+        return;
+    }
+
+    selectedHex = hex;
+    const key = hexKey(hex.q, hex.r);
+    const bld = grid[key];
+
+    if (bld && bld.type !== 'hq') {
+        // Show sell button
+        document.getElementById('buildmenu').style.display = 'none';
+        document.getElementById('sellbtn').style.display = 'block';
+    } else if (!bld) {
+        // Show build menu
+        document.getElementById('buildmenu').style.display = 'flex';
+        document.getElementById('sellbtn').style.display = 'none';
+        // Update button states based on energy
+        document.querySelectorAll('.bbtn').forEach(btn => {
+            const type = btn.dataset.type;
+            btn.style.opacity = energy >= COSTS[type] ? '1' : '0.4';
+        });
+    } else {
+        // HQ selected, show nothing
+        hideMenus();
+    }
+}
+
+// Touch events
+document.addEventListener('touchstart', function(e) {
+    if (gameState === 'START') {
+        gameState = 'PLAYING';
+        document.getElementById('startscreen').style.display = 'none';
+        initGrid();
+        energy = 100;
+        wave = 0;
+        waveTimer = 0;
+        enemies = [];
+        soldiers = [];
+        shots = [];
+        particles = [];
+        wavesCompleted = 0;
+        gameTime = 0;
+        return;
+    }
+    if (gameState === 'GAME_OVER') {
+        gameState = 'PLAYING';
+        document.getElementById('gameover').style.display = 'none';
+        initGrid();
+        energy = 100;
+        wave = 0;
+        waveTimer = 0;
+        enemies = [];
+        soldiers = [];
+        shots = [];
+        particles = [];
+        wavesCompleted = 0;
+        gameTime = 0;
+        hideMenus();
+        selectedHex = null;
+        buildMode = null;
+        return;
+    }
+
+    const touches = e.touches;
+    if (touches.length === 1) {
+        touchStartX = touches[0].clientX;
+        touchStartY = touches[0].clientY;
+        touchMoved = false;
+        isDragging = false;
+    } else if (touches.length === 2) {
+        const dx = touches[1].clientX - touches[0].clientX;
+        const dy = touches[1].clientY - touches[0].clientY;
+        pinchStartDist = Math.sqrt(dx * dx + dy * dy);
+        pinchStartZoom = cam.zoom;
+        isDragging = true;
+        touchMoved = true;
+    }
+}, { passive: true });
+
+document.addEventListener('touchmove', function(e) {
+    if (gameState !== 'PLAYING') return;
+    e.preventDefault();
+    const touches = e.touches;
+
+    if (touches.length === 2) {
+        const dx = touches[1].clientX - touches[0].clientX;
+        const dy = touches[1].clientY - touches[0].clientY;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        cam.zoom = Math.max(CAM_ZOOM_MIN, Math.min(CAM_ZOOM_MAX, pinchStartZoom * (dist / pinchStartDist)));
+        touchMoved = true;
+        return;
+    }
+
+    if (touches.length === 1) {
+        const dx = touches[0].clientX - touchStartX;
+        const dy = touches[0].clientY - touchStartY;
+        if (Math.abs(dx) > 10 || Math.abs(dy) > 10) {
+            touchMoved = true;
+            isDragging = true;
+        }
+        if (isDragging) {
+            cam.x -= dx / cam.zoom;
+            cam.y -= dy / cam.zoom;
+            touchStartX = touches[0].clientX;
+            touchStartY = touches[0].clientY;
+        }
+
+        // Update hover hex for build preview
+        if (buildMode) {
+            hoverHex = screenToHex(touches[0].clientX, touches[0].clientY);
+        }
+    }
+}, { passive: false });
+
+document.addEventListener('touchend', function(e) {
+    if (gameState !== 'PLAYING') return;
+    if (!touchMoved && e.changedTouches.length > 0) {
+        const t = e.changedTouches[0];
+        handleTap(t.clientX, t.clientY);
+    }
+    isDragging = false;
+}, { passive: true });
+
+// Mouse events
+document.addEventListener('mousedown', function(e) {
+    if (e.target.tagName === 'BUTTON' || e.target.tagName === 'A') return;
+
+    if (gameState === 'START') {
+        gameState = 'PLAYING';
+        document.getElementById('startscreen').style.display = 'none';
+        initGrid();
+        energy = 100;
+        wave = 0;
+        waveTimer = 0;
+        enemies = [];
+        soldiers = [];
+        shots = [];
+        particles = [];
+        wavesCompleted = 0;
+        gameTime = 0;
+        return;
+    }
+    if (gameState === 'GAME_OVER') {
+        gameState = 'PLAYING';
+        document.getElementById('gameover').style.display = 'none';
+        initGrid();
+        energy = 100;
+        wave = 0;
+        waveTimer = 0;
+        enemies = [];
+        soldiers = [];
+        shots = [];
+        particles = [];
+        wavesCompleted = 0;
+        gameTime = 0;
+        hideMenus();
+        selectedHex = null;
+        buildMode = null;
+        return;
+    }
+
+    mouseDown = true;
+    mouseStartX = e.clientX;
+    mouseStartY = e.clientY;
+    touchMoved = false;
+});
+
+document.addEventListener('mousemove', function(e) {
+    if (gameState !== 'PLAYING') return;
+
+    // Build mode hover
+    if (buildMode) {
+        hoverHex = screenToHex(e.clientX, e.clientY);
+    }
+
+    if (!mouseDown) return;
+    const dx = e.clientX - mouseStartX;
+    const dy = e.clientY - mouseStartY;
+    if (Math.abs(dx) > 5 || Math.abs(dy) > 5) {
+        touchMoved = true;
+    }
+    if (touchMoved) {
+        cam.x -= dx / cam.zoom;
+        cam.y -= dy / cam.zoom;
+        mouseStartX = e.clientX;
+        mouseStartY = e.clientY;
+    }
+});
+
+document.addEventListener('mouseup', function(e) {
+    if (gameState !== 'PLAYING') { mouseDown = false; return; }
+    if (e.target.tagName === 'BUTTON' || e.target.tagName === 'A') { mouseDown = false; return; }
+    if (!touchMoved) {
+        handleTap(e.clientX, e.clientY);
+    }
+    mouseDown = false;
+});
+
+document.addEventListener('wheel', function(e) {
+    if (gameState !== 'PLAYING') return;
+    e.preventDefault();
+    const zoomFactor = e.deltaY > 0 ? 0.9 : 1.1;
+    cam.zoom = Math.max(CAM_ZOOM_MIN, Math.min(CAM_ZOOM_MAX, cam.zoom * zoomFactor));
+}, { passive: false });
+
+// Keyboard
+document.addEventListener('keydown', function(e) {
+    if (gameState !== 'PLAYING') return;
+    if (e.key === 'Escape') {
+        buildMode = null;
+        selectedHex = null;
+        hideMenus();
+        return;
+    }
+    if (selectedHex && !buildMode) {
+        const key = hexKey(selectedHex.q, selectedHex.r);
+        if (!grid[key]) {
+            const typeMap = { '1': 'wall', '2': 'generator', '3': 'tower', '4': 'barracks' };
+            if (typeMap[e.key]) {
+                buildMode = typeMap[e.key];
+                hideMenus();
+                document.getElementById('msg').textContent = 'TAP HEX TO PLACE ' + buildMode.toUpperCase();
+            }
+        }
+    }
+});
+
+// Build buttons
+document.querySelectorAll('.bbtn').forEach(btn => {
+    function activate(e) {
+        e.stopPropagation();
+        e.preventDefault();
+        if (gameState !== 'PLAYING') return;
+        const type = btn.dataset.type;
+        if (energy < COSTS[type]) return;
+        buildMode = type;
+        document.getElementById('buildmenu').style.display = 'none';
+        document.getElementById('sellbtn').style.display = 'none';
+        document.getElementById('msg').textContent = 'TAP HEX TO PLACE ' + type.toUpperCase();
+    }
+    btn.addEventListener('click', activate);
+    btn.addEventListener('touchstart', function(e) { e.stopPropagation(); }, { passive: false });
+    btn.addEventListener('touchend', activate, { passive: false });
+});
+
+// Sell button
+const sellBtn = document.getElementById('sellaction');
+function sellActivate(e) {
+    e.stopPropagation();
+    e.preventDefault();
+    if (gameState !== 'PLAYING' || !selectedHex) return;
+    sellBuilding(selectedHex.q, selectedHex.r);
+    selectedHex = null;
+    hideMenus();
+}
+sellBtn.addEventListener('click', sellActivate);
+sellBtn.addEventListener('touchstart', function(e) { e.stopPropagation(); }, { passive: false });
+sellBtn.addEventListener('touchend', sellActivate, { passive: false });
+
+// ===== GAME LOOP =====
+function loop(timestamp) {
+    requestAnimationFrame(loop);
+
+    const dt = Math.min((timestamp - lastTime) / 1000, 0.05);
+    lastTime = timestamp;
+
+    // FPS
+    fpsFrames++;
+    fpsTime += dt;
+    if (fpsTime >= 1) {
+        fpsDisplay = Math.round(fpsFrames / fpsTime);
+        fpsFrames = 0;
+        fpsTime = 0;
+        document.getElementById('fps').textContent = fpsDisplay + ' FPS';
+    }
+
+    update(dt);
+    render();
+}
+
+// Init
+initGrid();
+lastTime = performance.now();
+requestAnimationFrame(loop);
+
+</script>
+</body>
+</html>

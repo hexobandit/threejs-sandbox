@@ -1,0 +1,1719 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0,user-scalable=no,maximum-scale=1.0">
+<title>Carrier Battle</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{width:100%;height:100%;overflow:hidden;background:#000;touch-action:none;-webkit-touch-callout:none;-webkit-user-select:none;user-select:none}
+canvas{display:block;width:100%;height:100%}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:0}}
+@keyframes pulseGlow{0%{box-shadow:0 0 6px rgba(68,136,255,0.6)}50%{box-shadow:0 0 14px rgba(68,136,255,1)}100%{box-shadow:0 0 6px rgba(68,136,255,0.6)}}
+@keyframes pulseGlowGreen{0%{box-shadow:0 0 6px rgba(0,255,136,0.6)}50%{box-shadow:0 0 14px rgba(0,255,136,1)}100%{box-shadow:0 0 6px rgba(0,255,136,0.6)}}
+</style>
+<script type="importmap">
+{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"}}
+</script>
+</head>
+<body>
+
+<!-- Player HP bars (left side) -->
+<div id="player-status" style="position:fixed;top:12px;left:12px;font-family:'Courier New',monospace;font-size:11px;color:#fff;z-index:10;pointer-events:none;line-height:1.8">
+    <div style="color:#4488ff;font-size:13px;margin-bottom:4px">USS AURORA</div>
+    <div>HULL: <span id="p-hull-bar" style="color:#00ff88">████████████████████</span> <span id="p-hull">100</span></div>
+    <div>SHLD: <span id="p-shield-bar" style="color:#4488ff">██████████</span> <span id="p-shield">50</span></div>
+</div>
+
+<!-- Enemy HP bars (right side) -->
+<div id="enemy-status" style="position:fixed;top:12px;right:12px;font-family:'Courier New',monospace;font-size:11px;color:#fff;z-index:10;pointer-events:none;text-align:right;line-height:1.8">
+    <div style="color:#ff4444;font-size:13px;margin-bottom:4px">IRN DEVASTATOR</div>
+    <div><span id="e-hull">120</span> <span id="e-hull-bar" style="color:#ff4444">████████████████████████</span> :HULL</div>
+    <div><span id="e-shield">60</span> <span id="e-shield-bar" style="color:#ff8844">████████████</span> :SHLD</div>
+</div>
+
+<!-- Battle log -->
+<div id="battlelog" style="position:fixed;top:80px;left:12px;font-family:'Courier New',monospace;font-size:9px;color:#888;z-index:10;pointer-events:none;max-height:150px;overflow:hidden;line-height:1.6;max-width:250px"></div>
+
+<!-- Center message -->
+<div id="centerMsg" style="position:fixed;top:40%;left:50%;transform:translate(-50%,-50%);font-family:'Courier New',monospace;font-size:28px;color:#fff;z-index:25;pointer-events:none;text-shadow:0 3px 10px rgba(0,0,0,0.8);display:none"></div>
+
+<!-- ACTION BUTTONS -->
+<div id="actions" style="position:fixed;bottom:8px;left:50%;transform:translateX(-50%);z-index:15;display:flex;gap:4px;flex-wrap:wrap;justify-content:center;max-width:95vw"></div>
+
+<!-- FPS -->
+<div id="fps" style="position:fixed;bottom:8px;left:8px;font-family:'Courier New',monospace;font-size:9px;color:#ffcc00;z-index:10;pointer-events:none">-- FPS</div>
+<a id="back" href="../index.html" style="position:fixed;bottom:8px;right:8px;font-family:'Courier New',monospace;font-size:9px;color:#00ff88;text-decoration:none;z-index:10">&larr; menu</a>
+
+<!-- Start screen -->
+<div id="startscreen" style="position:fixed;inset:0;background:rgba(0,0,0,0.9);z-index:30;display:flex;flex-direction:column;align-items:center;justify-content:center;font-family:'Courier New',monospace;color:#fff">
+    <h1 style="font-size:24px;color:#4488ff;margin-bottom:4px">CARRIER BATTLE</h1>
+    <p style="font-size:14px;color:#888;margin-bottom:16px">COMMAND YOUR CARRIER</p>
+    <p style="font-size:11px;color:#666;margin-bottom:4px">TAP ACTIONS TO ATTACK &middot; DEFEND &middot; REPAIR</p>
+    <p style="font-size:11px;color:#666;margin-bottom:24px">DESTROY THE ENEMY CARRIER TO WIN</p>
+    <p style="font-size:16px;color:#4488ff;animation:blink 1s step-end infinite">TAP TO ENGAGE</p>
+</div>
+
+<!-- End screen -->
+<div id="endscreen" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.9);z-index:30;flex-direction:column;align-items:center;justify-content:center;font-family:'Courier New',monospace;color:#fff">
+    <h1 id="endtitle" style="font-size:28px;margin-bottom:12px">VICTORY</h1>
+    <p id="endstats" style="font-size:12px;color:#888;margin-bottom:24px;text-align:center;line-height:1.8"></p>
+    <p style="font-size:14px;color:#888;animation:blink 1s step-end infinite">TAP TO PLAY AGAIN</p>
+</div>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+// ─── CONSTANTS ───
+const PLAYER_POS = new THREE.Vector3(-15, 0, 0);
+const ENEMY_POS = new THREE.Vector3(15, 0, 0);
+const PLAYER_MAX_HULL = 100;
+const PLAYER_MAX_SHIELD = 50;
+const ENEMY_MAX_HULL = 120;
+const ENEMY_MAX_SHIELD = 60;
+
+// ─── RENDERER ───
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 0.9;
+document.body.appendChild(renderer.domElement);
+
+// ─── SCENE ───
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x000005);
+scene.fog = new THREE.FogExp2(0x000005, 0.003);
+
+// ─── CAMERA ───
+const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 500);
+camera.position.set(-25, 12, 20); // behind player carrier, looking toward enemy
+
+// ─── ORBIT CONTROLS (player-controlled camera) ───
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.target.set(0, 0, 0); // look at center of battle
+controls.enableDamping = true;
+controls.dampingFactor = 0.08;
+controls.minDistance = 10;
+controls.maxDistance = 60;
+controls.maxPolarAngle = Math.PI / 2.1; // don't go below the scene
+controls.enablePan = false; // keep focused on the battle
+
+// ─── LIGHTING ───
+const ambientLight = new THREE.AmbientLight(0x223344, 0.8);
+scene.add(ambientLight);
+const dirLight = new THREE.DirectionalLight(0xffffff, 1.2);
+dirLight.position.set(10, 20, 15);
+scene.add(dirLight);
+const fillLight = new THREE.DirectionalLight(0x4488ff, 0.3);
+fillLight.position.set(-10, -5, -10);
+scene.add(fillLight);
+
+// ─── STARS ───
+const starGeo = new THREE.BufferGeometry();
+const starVerts = new Float32Array(1500 * 3);
+for (let i = 0; i < 1500; i++) {
+    starVerts[i * 3] = (Math.random() - 0.5) * 400;
+    starVerts[i * 3 + 1] = (Math.random() - 0.5) * 400;
+    starVerts[i * 3 + 2] = (Math.random() - 0.5) * 400;
+}
+starGeo.setAttribute('position', new THREE.BufferAttribute(starVerts, 3));
+const starMat = new THREE.PointsMaterial({ color: 0xffffff, size: 0.4, sizeAttenuation: true });
+scene.add(new THREE.Points(starGeo, starMat));
+
+// ─── NEBULA ───
+const nebGeo = new THREE.SphereGeometry(80, 16, 16);
+const nebMat = new THREE.MeshBasicMaterial({ color: 0x220044, transparent: true, opacity: 0.08, side: THREE.BackSide });
+scene.add(new THREE.Mesh(nebGeo, nebMat));
+const neb2Mat = new THREE.MeshBasicMaterial({ color: 0x002244, transparent: true, opacity: 0.06, side: THREE.BackSide });
+const neb2 = new THREE.Mesh(new THREE.SphereGeometry(100, 16, 16), neb2Mat);
+neb2.position.set(30, -20, -40);
+scene.add(neb2);
+
+// ─── BUILD CARRIER ───
+function buildCarrier(isEnemy) {
+    const group = new THREE.Group();
+    const hullColor = isEnemy ? 0x664444 : 0x556688;
+    const accentColor = isEnemy ? 0xff3333 : 0x44aaff;
+    const engineColor = isEnemy ? 0xff4422 : 0x00ccff;
+    const scale = isEnemy ? 1.15 : 1.0;
+
+    // Main hull
+    const hullGeo = new THREE.BoxGeometry(10 * scale, 1.5 * scale, 3.5 * scale);
+    const hullMat = new THREE.MeshStandardMaterial({ color: hullColor, roughness: 0.7, metalness: 0.5 });
+    const hull = new THREE.Mesh(hullGeo, hullMat);
+    group.add(hull);
+    group.userData.hullMesh = hull;
+    group.userData.hullMat = hullMat;
+
+    // Bridge tower
+    const bridgeGeo = new THREE.BoxGeometry(1.5 * scale, 2 * scale, 1.5 * scale);
+    const bridgeMat = new THREE.MeshStandardMaterial({ color: hullColor, roughness: 0.6, metalness: 0.6 });
+    const bridge = new THREE.Mesh(bridgeGeo, bridgeMat);
+    bridge.position.set(1 * scale, 1.5 * scale, 0);
+    group.add(bridge);
+
+    // Bridge detail
+    const bridgeTop = new THREE.Mesh(
+        new THREE.BoxGeometry(0.8 * scale, 0.3 * scale, 0.8 * scale),
+        new THREE.MeshStandardMaterial({ color: accentColor, emissive: accentColor, emissiveIntensity: 0.3 })
+    );
+    bridgeTop.position.set(1 * scale, 2.6 * scale, 0);
+    group.add(bridgeTop);
+
+    // Engine block
+    const engineGeo = new THREE.BoxGeometry(2.5 * scale, 1.5 * scale, 3.5 * scale);
+    const engineMat = new THREE.MeshStandardMaterial({ color: 0x333333, roughness: 0.8, metalness: 0.4 });
+    const engineBlock = new THREE.Mesh(engineGeo, engineMat);
+    const engineDir = isEnemy ? 1 : -1;
+    engineBlock.position.set((-5 + (isEnemy ? 10 : 0)) * scale * engineDir * (isEnemy ? -0.45 : 0.45) + (isEnemy ? 5.5 : -5.5) * scale, 0, 0);
+    // Simplify: place engine at rear
+    engineBlock.position.set(isEnemy ? 6.2 * scale : -6.2 * scale, 0, 0);
+    group.add(engineBlock);
+
+    // Engine glow rings
+    for (let i = 0; i < 4; i++) {
+        const ringGeo = new THREE.RingGeometry(0.25 * scale, 0.4 * scale, 8);
+        const ringMat = new THREE.MeshBasicMaterial({ color: engineColor, side: THREE.DoubleSide });
+        const ring = new THREE.Mesh(ringGeo, ringMat);
+        const z = (i - 1.5) * 0.8 * scale;
+        ring.position.set(isEnemy ? 7.5 * scale : -7.5 * scale, (i < 2 ? 0.3 : -0.3) * scale, z);
+        ring.rotation.y = Math.PI / 2;
+        group.add(ring);
+    }
+
+    // Flight deck (underside)
+    const deckGeo = new THREE.BoxGeometry(6 * scale, 0.1 * scale, 2.5 * scale);
+    const deckMat = new THREE.MeshStandardMaterial({ color: 0x334455, roughness: 0.9, metalness: 0.2 });
+    const deck = new THREE.Mesh(deckGeo, deckMat);
+    deck.position.set(isEnemy ? -1 * scale : 1 * scale, -0.8 * scale, 0);
+    group.add(deck);
+
+    // Deck lines
+    const lineGeo = new THREE.BoxGeometry(5 * scale, 0.02, 0.05);
+    const lineMat = new THREE.MeshBasicMaterial({ color: accentColor });
+    for (let i = 0; i < 3; i++) {
+        const line = new THREE.Mesh(lineGeo, lineMat);
+        line.position.set(isEnemy ? -1 * scale : 1 * scale, -0.74 * scale, (i - 1) * 0.8 * scale);
+        group.add(line);
+    }
+
+    // Turret mounts
+    const turretGeo = new THREE.CylinderGeometry(0.15 * scale, 0.2 * scale, 0.3 * scale, 6);
+    const turretMat = new THREE.MeshStandardMaterial({ color: 0x888888, roughness: 0.5, metalness: 0.7 });
+    const turretPositions = [
+        [2, 0.9, 1.5], [-2, 0.9, 1.5], [2, 0.9, -1.5], [-2, 0.9, -1.5],
+        [3.5, 0.9, 0], [-3.5, 0.9, 0]
+    ];
+    turretPositions.forEach(p => {
+        const turret = new THREE.Mesh(turretGeo, turretMat);
+        turret.position.set(p[0] * scale, p[1] * scale, p[2] * scale);
+        group.add(turret);
+        // barrel
+        const barrel = new THREE.Mesh(
+            new THREE.CylinderGeometry(0.04 * scale, 0.04 * scale, 0.5 * scale, 4),
+            turretMat
+        );
+        barrel.rotation.z = Math.PI / 2;
+        barrel.position.set(p[0] * scale + (isEnemy ? -0.3 : 0.3) * scale, p[1] * scale + 0.1 * scale, p[2] * scale);
+        group.add(barrel);
+    });
+
+    // Antenna arrays
+    const antGeo = new THREE.CylinderGeometry(0.02 * scale, 0.02 * scale, 1.5 * scale, 4);
+    const antMat = new THREE.MeshBasicMaterial({ color: 0x888888 });
+    const ant1 = new THREE.Mesh(antGeo, antMat);
+    ant1.position.set(1 * scale, 3.2 * scale, 0);
+    group.add(ant1);
+    const ant2 = new THREE.Mesh(antGeo, antMat);
+    ant2.rotation.z = Math.PI / 6;
+    ant2.position.set(1.5 * scale, 2.8 * scale, 0.3 * scale);
+    group.add(ant2);
+
+    // Wedge front for enemy
+    if (isEnemy) {
+        const wedgeGeo = new THREE.BoxGeometry(3 * scale, 1.0 * scale, 3.0 * scale);
+        const wedge = new THREE.Mesh(wedgeGeo, hullMat);
+        wedge.position.set(-6.5 * scale, 0, 0);
+        wedge.scale.set(1, 1, 0.7);
+        group.add(wedge);
+    }
+
+    // Face toward the other carrier
+    if (isEnemy) {
+        group.rotation.y = Math.PI;
+    }
+
+    return group;
+}
+
+const playerCarrier = buildCarrier(false);
+playerCarrier.position.copy(PLAYER_POS);
+scene.add(playerCarrier);
+
+const enemyCarrier = buildCarrier(true);
+enemyCarrier.position.copy(ENEMY_POS);
+scene.add(enemyCarrier);
+
+// ─── SHIELD SPHERES (visual) ───
+const shieldGeo = new THREE.SphereGeometry(7, 16, 16);
+const playerShieldMat = new THREE.MeshBasicMaterial({ color: 0x4488ff, transparent: true, opacity: 0, side: THREE.DoubleSide, depthWrite: false });
+const playerShieldMesh = new THREE.Mesh(shieldGeo, playerShieldMat);
+playerShieldMesh.position.copy(PLAYER_POS);
+scene.add(playerShieldMesh);
+
+const enemyShieldMat = new THREE.MeshBasicMaterial({ color: 0xff4444, transparent: true, opacity: 0, side: THREE.DoubleSide, depthWrite: false });
+const enemyShieldMesh = new THREE.Mesh(shieldGeo.clone(), enemyShieldMat);
+enemyShieldMesh.position.copy(ENEMY_POS);
+scene.add(enemyShieldMesh);
+
+// ─── OBJECT POOLS ───
+// Laser lines
+const laserPool = [];
+const laserMat = new THREE.MeshBasicMaterial({ color: 0x00ffff });
+const laserEnemyMat = new THREE.MeshBasicMaterial({ color: 0xff3333 });
+for (let i = 0; i < 12; i++) {
+    const geo = new THREE.BoxGeometry(0.08, 0.08, 1);
+    const mesh = new THREE.Mesh(geo, i < 6 ? laserMat.clone() : laserEnemyMat.clone());
+    mesh.visible = false;
+    scene.add(mesh);
+    laserPool.push({ mesh, active: false, timer: 0, alpha: 1 });
+}
+
+// Missiles
+const missilePool = [];
+const missileMat = new THREE.MeshBasicMaterial({ color: 0xff8800 });
+const missileEnemyMat = new THREE.MeshBasicMaterial({ color: 0xff2200 });
+for (let i = 0; i < 6; i++) {
+    const geo = new THREE.BoxGeometry(0.15, 0.15, 0.5);
+    const mesh = new THREE.Mesh(geo, i < 3 ? missileMat.clone() : missileEnemyMat.clone());
+    mesh.visible = false;
+    scene.add(mesh);
+    missilePool.push({ mesh, active: false, timer: 0, duration: 0, start: new THREE.Vector3(), end: new THREE.Vector3(), arc: 0, isEnemy: i >= 3, intercepted: false });
+}
+
+// Missile exhaust trails
+const exhaustPool = [];
+const exhaustGeo = new THREE.BufferGeometry();
+const exhaustPositions = new Float32Array(20 * 3);
+exhaustGeo.setAttribute('position', new THREE.BufferAttribute(exhaustPositions, 3));
+for (let i = 0; i < 6; i++) {
+    const geo = new THREE.BufferGeometry();
+    const pos = new Float32Array(20 * 3);
+    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    const mat = new THREE.PointsMaterial({ color: i < 3 ? 0xff8800 : 0xff2200, size: 0.15, transparent: true, opacity: 0.7 });
+    const points = new THREE.Points(geo, mat);
+    points.visible = false;
+    scene.add(points);
+    exhaustPool.push({ points, positions: pos });
+}
+
+// Bombers
+const bomberPool = [];
+for (let i = 0; i < 14; i++) {
+    const geo = new THREE.BoxGeometry(0.3, 0.15, 0.2);
+    const mat = new THREE.MeshBasicMaterial({ color: i < 7 ? 0x00ccff : 0xff3333 });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.visible = false;
+    scene.add(mesh);
+    bomberPool.push({ mesh, active: false, timer: 0, duration: 0, start: new THREE.Vector3(), end: new THREE.Vector3(), returning: false, returnStart: new THREE.Vector3(), isEnemy: i >= 7, dead: false });
+}
+
+// Torpedoes
+const torpedoPool = [];
+for (let i = 0; i < 4; i++) {
+    const geo = new THREE.SphereGeometry(0.3, 8, 8);
+    const mat = new THREE.MeshBasicMaterial({ color: i < 2 ? 0x00ffff : 0xff4444 });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.visible = false;
+    scene.add(mesh);
+    // Exhaust trail for torpedo
+    const trailGeo = new THREE.BufferGeometry();
+    const trailPos = new Float32Array(30 * 3);
+    trailGeo.setAttribute('position', new THREE.BufferAttribute(trailPos, 3));
+    const trailMat = new THREE.PointsMaterial({ color: i < 2 ? 0x00ffff : 0xff4444, size: 0.2, transparent: true, opacity: 0.6 });
+    const trail = new THREE.Points(trailGeo, trailMat);
+    trail.visible = false;
+    scene.add(trail);
+    torpedoPool.push({ mesh, trail, trailPos, active: false, timer: 0, duration: 0, start: new THREE.Vector3(), end: new THREE.Vector3(), isEnemy: i >= 2, missed: false });
+}
+
+// Explosion particles
+const explosionPool = [];
+for (let i = 0; i < 100; i++) {
+    const geo = new THREE.BoxGeometry(0.12, 0.12, 0.12);
+    const mat = new THREE.MeshBasicMaterial({ color: 0xffaa00, transparent: true, opacity: 1 });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.visible = false;
+    scene.add(mesh);
+    explosionPool.push({ mesh, mat, active: false, timer: 0, velocity: new THREE.Vector3() });
+}
+
+// Fighters (player defense)
+const fighterPool = [];
+for (let i = 0; i < 10; i++) {
+    const geo = new THREE.BoxGeometry(0.25, 0.1, 0.15);
+    const mat = new THREE.MeshBasicMaterial({ color: 0x4488ff });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.visible = false;
+    scene.add(mesh);
+    fighterPool.push({ mesh, active: false, angle: (i / 10) * Math.PI * 2, speed: 1 + Math.random() * 0.5 });
+}
+
+// Repair particles
+const repairPool = [];
+for (let i = 0; i < 20; i++) {
+    const geo = new THREE.BoxGeometry(0.08, 0.08, 0.08);
+    const mat = new THREE.MeshBasicMaterial({ color: 0x00ff88, transparent: true, opacity: 1 });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.visible = false;
+    scene.add(mesh);
+    repairPool.push({ mesh, mat, active: false, timer: 0, velocity: new THREE.Vector3() });
+}
+
+// EMP ring
+const empRingGeo = new THREE.RingGeometry(0.5, 1.0, 32);
+const empRingMat = new THREE.MeshBasicMaterial({ color: 0x4488ff, transparent: true, opacity: 0.8, side: THREE.DoubleSide });
+const empRing = new THREE.Mesh(empRingGeo, empRingMat);
+empRing.visible = false;
+empRing.rotation.x = Math.PI / 2;
+scene.add(empRing);
+
+// Smoke particles for low HP
+const smokePool = [];
+for (let i = 0; i < 20; i++) {
+    const geo = new THREE.BoxGeometry(0.2, 0.2, 0.2);
+    const mat = new THREE.MeshBasicMaterial({ color: 0x333333, transparent: true, opacity: 0.5 });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.visible = false;
+    scene.add(mesh);
+    smokePool.push({ mesh, mat, active: false, timer: 0, velocity: new THREE.Vector3(), owner: null });
+}
+
+// Fire cubes for critical HP
+const firePool = [];
+for (let i = 0; i < 10; i++) {
+    const geo = new THREE.BoxGeometry(0.15, 0.15, 0.15);
+    const mat = new THREE.MeshBasicMaterial({ color: 0xff6600, transparent: true, opacity: 0 });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.visible = false;
+    scene.add(mesh);
+    firePool.push({ mesh, mat, flicker: 0 });
+}
+
+// ─── GAME STATE ───
+let gameState = 'START'; // START, BATTLE, END
+let battleTime = 0;
+let gameTime = 0;
+let cameraShake = 0;
+let stats = { damageDealt: 0, actionsUsed: 0, time: 0 };
+
+const player = {
+    hull: PLAYER_MAX_HULL,
+    maxHull: PLAYER_MAX_HULL,
+    shield: PLAYER_MAX_SHIELD,
+    maxShield: PLAYER_MAX_SHIELD,
+    shieldRegen: 1,
+    pos: PLAYER_POS,
+    flashTimer: 0,
+    fightersActive: false,
+    fighterTimer: 0,
+    empActive: false,
+    empTimer: 0,
+    cloaked: false,
+    cloakTimer: 0
+};
+
+const enemy = {
+    hull: ENEMY_MAX_HULL,
+    maxHull: ENEMY_MAX_HULL,
+    shield: ENEMY_MAX_SHIELD,
+    maxShield: ENEMY_MAX_SHIELD,
+    shieldRegen: 0.8,
+    pos: ENEMY_POS,
+    flashTimer: 0,
+    fightersActive: false,
+    fighterTimer: 0,
+    jammed: false,
+    jamTimer: 0,
+    // AI cooldowns
+    laserCD: 2,
+    missileCD: 6,
+    bomberCD: 12,
+    torpedoCD: 18,
+    repairCD: 10,
+    shieldCD: 8
+};
+
+// Action definitions
+const ACTION_DEFS = {
+    lasers:  { cooldown: 3,  current: 0, icon: '\u26A1', label: 'LASER',   type: 'offense' },
+    flak:    { cooldown: 5,  current: 0, icon: '\u2022', label: 'FLAK',    type: 'offense' },
+    missiles:{ cooldown: 8,  current: 0, icon: '\uD83D\uDE80', label: 'MISSILE', type: 'offense' },
+    railgun: { cooldown: 10, current: 0, icon: '\u2503', label: 'RAILGUN', type: 'offense' },
+    bombers: { cooldown: 15, current: 0, icon: '\u2708', label: 'BOMBER',  type: 'offense' },
+    torpedo: { cooldown: 20, current: 0, icon: '\uD83D\uDCA5', label: 'TORPEDO', type: 'offense' },
+    nuke:    { cooldown: 35, current: 0, icon: '\u2622', label: 'NUKE',    type: 'offense' },
+    repair:  { cooldown: 12, current: 0, icon: '\uD83D\uDD27', label: 'REPAIR',  type: 'defense' },
+    shields: { cooldown: 10, current: 0, icon: '\uD83D\uDEE1', label: 'SHIELD',  type: 'defense' },
+    fighters:{ cooldown: 12, current: 0, icon: '\uD83D\uDEE9', label: 'FIGHTER', type: 'defense' },
+    cloak:   { cooldown: 20, current: 0, icon: '\uD83D\uDC7B', label: 'CLOAK',   type: 'defense' },
+    emp:     { cooldown: 25, current: 0, icon: '\u26A1', label: 'EMP',     type: 'defense' }
+};
+
+// ─── BUILD ACTION BUTTONS ───
+const actionsDiv = document.getElementById('actions');
+const btnElements = {};
+
+Object.entries(ACTION_DEFS).forEach(([key, def]) => {
+    const borderColor = def.type === 'offense' ? '#4488ff' : '#00ff88';
+    const btn = document.createElement('div');
+    btn.className = 'action-btn';
+    btn.dataset.action = key;
+    btn.style.cssText = `
+        width:70px;height:60px;
+        background:rgba(0,30,60,0.9);
+        border:2px solid ${borderColor};
+        border-radius:6px;
+        display:flex;flex-direction:column;
+        align-items:center;justify-content:center;
+        font-family:'Courier New',monospace;
+        font-size:9px;color:#fff;
+        cursor:pointer;
+        position:relative;
+        -webkit-tap-highlight-color:transparent;
+        overflow:hidden;
+        animation:${def.type === 'offense' ? 'pulseGlow' : 'pulseGlowGreen'} 2s ease-in-out infinite;
+    `;
+    btn.innerHTML = `
+        <span style="font-size:16px;position:relative;z-index:2">${def.icon}</span>
+        <span style="position:relative;z-index:2">${def.label}</span>
+        <span class="cd-text" style="font-size:8px;color:#888;position:relative;z-index:2">${def.cooldown}s</span>
+        <div class="cd-overlay" style="position:absolute;bottom:0;left:0;right:0;height:0%;background:rgba(0,0,0,0.7);pointer-events:none;transition:none"></div>
+    `;
+    actionsDiv.appendChild(btn);
+    btnElements[key] = {
+        el: btn,
+        overlay: btn.querySelector('.cd-overlay'),
+        cdText: btn.querySelector('.cd-text'),
+        borderColor
+    };
+});
+
+// ─── EVENT HANDLING ───
+document.querySelectorAll('.action-btn').forEach(btn => {
+    function activate(e) {
+        e.stopPropagation();
+        e.preventDefault();
+        if (gameState !== 'BATTLE') return;
+        const action = btn.dataset.action;
+        executeAction(action);
+    }
+    btn.addEventListener('click', activate);
+    btn.addEventListener('touchend', e => {
+        e.stopPropagation();
+        e.preventDefault();
+        activate(e);
+    }, { passive: false });
+    btn.addEventListener('touchstart', e => e.stopPropagation(), { passive: false });
+});
+
+document.addEventListener('click', e => {
+    if (e.target.closest('.action-btn')) return;
+    if (e.target.closest('#back')) return;
+    if (gameState === 'START') startBattle();
+    if (gameState === 'END') restartBattle();
+});
+document.addEventListener('touchend', e => {
+    if (e.target.closest('.action-btn')) return;
+    if (e.target.closest('#back')) return;
+    if (gameState === 'START') startBattle();
+    if (gameState === 'END') restartBattle();
+}, { passive: false });
+
+// ─── BATTLE LOG ───
+const battlelogEl = document.getElementById('battlelog');
+const logEntries = [];
+
+function addLog(msg) {
+    const mins = Math.floor(battleTime / 60);
+    const secs = Math.floor(battleTime % 60);
+    const timeStr = `${mins}:${secs.toString().padStart(2, '0')}`;
+    logEntries.unshift({ text: `[${timeStr}] ${msg}`, age: 0 });
+    if (logEntries.length > 10) logEntries.pop();
+    renderLog();
+}
+
+function renderLog() {
+    battlelogEl.innerHTML = logEntries.slice(0, 8).map((e, i) => {
+        const opacity = Math.max(0.3, 1 - i * 0.1 - e.age * 0.05);
+        return `<div style="opacity:${opacity.toFixed(2)}">${e.text}</div>`;
+    }).join('');
+}
+
+// ─── CENTER MESSAGE ───
+const centerMsgEl = document.getElementById('centerMsg');
+let centerMsgTimer = 0;
+
+function showCenterMsg(text, color = '#fff', duration = 1.5) {
+    centerMsgEl.textContent = text;
+    centerMsgEl.style.color = color;
+    centerMsgEl.style.display = 'block';
+    centerMsgTimer = duration;
+}
+
+// ─── HUD UPDATE ───
+function updateHUD() {
+    const pHullPct = player.hull / player.maxHull;
+    const pShieldPct = Math.min(player.shield / player.maxShield, 1.5);
+    const eHullPct = enemy.hull / enemy.maxHull;
+    const eShieldPct = Math.min(enemy.shield / enemy.maxShield, 1.5);
+
+    const pHullBars = Math.max(0, Math.round(pHullPct * 20));
+    const pShieldBars = Math.max(0, Math.round(pShieldPct * 10));
+    const eHullBars = Math.max(0, Math.round(eHullPct * 24));
+    const eShieldBars = Math.max(0, Math.round(eShieldPct * 12));
+
+    document.getElementById('p-hull-bar').textContent = '\u2588'.repeat(pHullBars) + '\u2591'.repeat(20 - pHullBars);
+    document.getElementById('p-hull-bar').style.color = pHullPct > 0.3 ? '#00ff88' : (pHullPct > 0.15 ? '#ffaa00' : '#ff3333');
+    document.getElementById('p-hull').textContent = Math.ceil(player.hull);
+    document.getElementById('p-shield-bar').textContent = '\u2588'.repeat(pShieldBars) + '\u2591'.repeat(Math.max(0, 10 - pShieldBars));
+    document.getElementById('p-shield').textContent = Math.ceil(player.shield);
+
+    document.getElementById('e-hull-bar').textContent = '\u2588'.repeat(eHullBars) + '\u2591'.repeat(24 - eHullBars);
+    document.getElementById('e-hull-bar').style.color = eHullPct > 0.3 ? '#ff4444' : (eHullPct > 0.15 ? '#ffaa00' : '#ff8888');
+    document.getElementById('e-hull').textContent = Math.ceil(enemy.hull);
+    document.getElementById('e-shield-bar').textContent = '\u2588'.repeat(eShieldBars) + '\u2591'.repeat(Math.max(0, 12 - eShieldBars));
+    document.getElementById('e-shield').textContent = Math.ceil(enemy.shield);
+
+    // Update action buttons
+    Object.entries(ACTION_DEFS).forEach(([key, def]) => {
+        const b = btnElements[key];
+        const pct = def.current / def.cooldown;
+        if (def.current > 0) {
+            b.overlay.style.height = (pct * 100).toFixed(1) + '%';
+            b.el.style.borderColor = '#333';
+            b.el.style.animation = 'none';
+            b.cdText.textContent = def.current.toFixed(1) + 's';
+        } else {
+            b.overlay.style.height = '0%';
+            b.el.style.borderColor = b.borderColor;
+            b.el.style.animation = `${def.type === 'offense' ? 'pulseGlow' : 'pulseGlowGreen'} 2s ease-in-out infinite`;
+            b.cdText.textContent = 'READY';
+            b.cdText.style.color = '#0f8';
+        }
+    });
+}
+
+// ─── DAMAGE SYSTEM ───
+function dealDamage(target, amount, source) {
+    if (target.shield > 0) {
+        const shieldDmg = Math.min(target.shield, amount);
+        target.shield -= shieldDmg;
+        amount -= shieldDmg * 0.5; // shields absorb half
+    }
+    if (amount > 0) {
+        target.hull -= amount;
+    }
+    target.flashTimer = 0.15;
+
+    // Shield flash
+    if (target === player) {
+        playerShieldMat.opacity = 0.3;
+    } else {
+        enemyShieldMat.opacity = 0.3;
+    }
+
+    if (target.hull <= 0) {
+        target.hull = 0;
+        endBattle(target === enemy);
+    }
+}
+
+// ─── EXPLOSION ───
+function spawnExplosion(position, count, color = 0xffaa00, speed = 5) {
+    let spawned = 0;
+    for (const p of explosionPool) {
+        if (!p.active && spawned < count) {
+            p.active = true;
+            p.timer = 0.6 + Math.random() * 0.3;
+            p.mesh.position.copy(position);
+            p.mesh.visible = true;
+            p.mat.opacity = 1;
+            p.mat.color.setHex(color);
+            p.velocity.set(
+                (Math.random() - 0.5) * speed,
+                (Math.random() - 0.5) * speed,
+                (Math.random() - 0.5) * speed
+            );
+            spawned++;
+        }
+    }
+}
+
+// ─── REPAIR PARTICLES ───
+function spawnRepairParticles(position) {
+    for (const p of repairPool) {
+        if (!p.active) {
+            p.active = true;
+            p.timer = 2;
+            p.mesh.position.set(
+                position.x + (Math.random() - 0.5) * 8,
+                position.y + (Math.random() - 0.5) * 4,
+                position.z + (Math.random() - 0.5) * 4
+            );
+            p.mesh.visible = true;
+            p.mat.opacity = 1;
+            p.velocity.set(
+                (Math.random() - 0.5) * 0.5,
+                Math.random() * 1.5,
+                (Math.random() - 0.5) * 0.5
+            );
+        }
+    }
+}
+
+// ─── FIRE LASERS ───
+function fireLasers(fromPos, toPos, isEnemy) {
+    const count = 4 + Math.floor(Math.random() * 3);
+    let fired = 0;
+    const startIdx = isEnemy ? 6 : 0;
+    const endIdx = isEnemy ? 12 : 6;
+    for (let i = startIdx; i < endIdx && fired < count; i++) {
+        const l = laserPool[i];
+        if (!l.active) {
+            l.active = true;
+            l.timer = 0.3;
+            l.alpha = 1;
+            const dir = new THREE.Vector3().subVectors(toPos, fromPos);
+            const len = dir.length();
+            dir.normalize();
+            // Offset each beam slightly
+            const offset = new THREE.Vector3(
+                (Math.random() - 0.5) * 2,
+                (Math.random() - 0.5) * 1,
+                (Math.random() - 0.5) * 2
+            );
+            const start = fromPos.clone().add(offset);
+            const end = toPos.clone().add(offset.multiplyScalar(0.3));
+            const mid = start.clone().add(end).multiplyScalar(0.5);
+            l.mesh.position.copy(mid);
+            l.mesh.lookAt(end);
+            l.mesh.scale.set(1, 1, start.distanceTo(end));
+            l.mesh.visible = true;
+            l.mesh.material.opacity = 1;
+            l.mesh.material.transparent = true;
+            fired++;
+        }
+    }
+    cameraShake = 0.15;
+}
+
+// ─── FIRE MISSILES ───
+function fireMissiles(fromPos, toPos, isEnemy) {
+    let fired = 0;
+    const startIdx = isEnemy ? 3 : 0;
+    const endIdx = isEnemy ? 6 : 3;
+    for (let i = startIdx; i < endIdx && fired < 2; i++) {
+        const m = missilePool[i];
+        if (!m.active) {
+            m.active = true;
+            m.timer = 0;
+            m.duration = 2;
+            m.start.copy(fromPos).add(new THREE.Vector3((Math.random() - 0.5) * 2, Math.random(), (Math.random() - 0.5) * 2));
+            m.end.copy(toPos).add(new THREE.Vector3((Math.random() - 0.5) * 2, 0, (Math.random() - 0.5) * 2));
+            m.arc = 3 + Math.random() * 3;
+            m.isEnemy = isEnemy;
+            m.intercepted = false;
+            m.mesh.visible = true;
+            exhaustPool[i].points.visible = true;
+            fired++;
+        }
+    }
+}
+
+// ─── LAUNCH BOMBERS ───
+function launchBombers(fromPos, toPos, isEnemy) {
+    const count = 6;
+    let launched = 0;
+    const startIdx = isEnemy ? 7 : 0;
+    const endIdx = isEnemy ? 14 : 7;
+    for (let i = startIdx; i < endIdx && launched < count; i++) {
+        const b = bomberPool[i];
+        if (!b.active) {
+            b.active = true;
+            b.timer = 0;
+            b.duration = 4;
+            b.start.copy(fromPos).add(new THREE.Vector3(isEnemy ? -2 : 2, -0.8, (launched - 2.5) * 0.5));
+            b.end.copy(toPos).add(new THREE.Vector3((Math.random() - 0.5) * 3, (Math.random() - 0.5) * 1, (Math.random() - 0.5) * 3));
+            b.returning = false;
+            b.dead = false;
+            b.isEnemy = isEnemy;
+            b.mesh.visible = true;
+            launched++;
+        }
+    }
+}
+
+// ─── FIRE TORPEDO ───
+function fireTorpedo(fromPos, toPos, isEnemy, willMiss) {
+    const startIdx = isEnemy ? 2 : 0;
+    const endIdx = isEnemy ? 4 : 2;
+    for (let i = startIdx; i < endIdx; i++) {
+        const t = torpedoPool[i];
+        if (!t.active) {
+            t.active = true;
+            t.timer = 0;
+            t.duration = 3;
+            t.start.copy(fromPos).add(new THREE.Vector3(isEnemy ? -3 : 3, 0, 0));
+            if (willMiss) {
+                t.end.copy(toPos).add(new THREE.Vector3(isEnemy ? -30 : 30, (Math.random() - 0.5) * 10, (Math.random() - 0.5) * 10));
+            } else {
+                t.end.copy(toPos);
+            }
+            t.isEnemy = isEnemy;
+            t.missed = willMiss;
+            t.mesh.visible = true;
+            t.trail.visible = true;
+            return;
+        }
+    }
+}
+
+// ─── EMP VISUAL ───
+let empRingActive = false;
+let empRingTimer = 0;
+let empRingScale = 0;
+
+function fireEMP() {
+    empRingActive = true;
+    empRingTimer = 1.5;
+    empRingScale = 1;
+    empRing.position.copy(PLAYER_POS);
+    empRing.visible = true;
+    empRingMat.opacity = 0.8;
+}
+
+// ─── EXECUTE PLAYER ACTION ───
+function executeAction(action) {
+    const def = ACTION_DEFS[action];
+    if (def.current > 0) return; // on cooldown
+
+    def.current = def.cooldown;
+    stats.actionsUsed++;
+
+    switch (action) {
+        case 'lasers': {
+            fireLasers(player.pos, enemy.pos, false);
+            const dmg = enemy.shield > 0 ? 5 : 3;
+            setTimeout(() => {
+                if (gameState !== 'BATTLE') return;
+                dealDamage(enemy, dmg, 'player');
+                spawnExplosion(enemy.pos.clone().add(new THREE.Vector3((Math.random()-0.5)*4, (Math.random()-0.5)*2, (Math.random()-0.5)*2)), 5, 0x00ffff, 3);
+                stats.damageDealt += dmg;
+                addLog(`LASERS fired \u2014 ${dmg} damage`);
+            }, 100);
+            break;
+        }
+        case 'flak': {
+            // Burst of small projectiles — 8 damage spread
+            for (let i = 0; i < 8; i++) {
+                setTimeout(() => {
+                    if (gameState !== 'BATTLE') return;
+                    const offset = new THREE.Vector3((Math.random()-0.5)*6, (Math.random()-0.5)*3, (Math.random()-0.5)*6);
+                    const target = enemy.pos.clone().add(offset);
+                    fireLasers(player.pos, target, false);
+                    spawnExplosion(target, 3, 0xffaa44, 1.5);
+                }, i * 60);
+            }
+            setTimeout(() => {
+                if (gameState !== 'BATTLE') return;
+                const dmg = enemy.shield > 0 ? 8 : 5;
+                dealDamage(enemy, dmg, 'player');
+                stats.damageDealt += dmg;
+                addLog(`FLAK barrage \u2014 ${dmg} damage`);
+            }, 500);
+            break;
+        }
+        case 'missiles': {
+            fireMissiles(player.pos, enemy.pos, false);
+            addLog('MISSILES launched!');
+            // Damage handled when missile arrives
+            break;
+        }
+        case 'railgun': {
+            // Single devastating beam — bypasses shields, hits hull directly
+            const beamStart = player.pos.clone().add(new THREE.Vector3(5, 0.5, 0));
+            const beamEnd = enemy.pos.clone().add(new THREE.Vector3(-3, 0, 0));
+            // Create bright beam line
+            const beamGeo = new THREE.CylinderGeometry(0.08, 0.08, beamStart.distanceTo(beamEnd), 4);
+            const beamMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 1, blending: THREE.AdditiveBlending });
+            const beam = new THREE.Mesh(beamGeo, beamMat);
+            beam.position.lerpVectors(beamStart, beamEnd, 0.5);
+            beam.lookAt(beamEnd);
+            beam.rotateX(Math.PI / 2);
+            scene.add(beam);
+            // Outer glow
+            const glowGeo = new THREE.CylinderGeometry(0.25, 0.25, beamStart.distanceTo(beamEnd), 4);
+            const glowMat = new THREE.MeshBasicMaterial({ color: 0x44aaff, transparent: true, opacity: 0.4, blending: THREE.AdditiveBlending });
+            const glow = new THREE.Mesh(glowGeo, glowMat);
+            glow.position.copy(beam.position);
+            glow.rotation.copy(beam.rotation);
+            scene.add(glow);
+            triggerShake(0.6, 15);
+            // Fade beam
+            let beamLife = 0.5;
+            const fadeBeam = () => {
+                beamLife -= 0.016;
+                beamMat.opacity = beamLife * 2;
+                glowMat.opacity = beamLife * 0.8;
+                if (beamLife > 0) requestAnimationFrame(fadeBeam);
+                else { scene.remove(beam); scene.remove(glow); }
+            };
+            fadeBeam();
+            // Damage directly to hull (bypasses shields!)
+            const dmg = 10;
+            enemy.hull = Math.max(0, enemy.hull - dmg);
+            stats.damageDealt += dmg;
+            spawnExplosion(beamEnd, 12, 0xffffff, 4);
+            addLog(`RAILGUN fired \u2014 ${dmg} hull damage (bypasses shields!)`);
+            showCenterMsg('RAILGUN', '#ffffff', 1);
+            if (enemy.hull <= 0) endBattle(true);
+            break;
+        }
+        case 'bombers': {
+            launchBombers(player.pos, enemy.pos, false);
+            addLog('BOMBERS launched \u2014 6 bombers en route');
+            break;
+        }
+        case 'torpedo': {
+            const willMiss = Math.random() < 0.2;
+            fireTorpedo(player.pos, enemy.pos, false, willMiss);
+            addLog('TORPEDO fired!');
+            break;
+        }
+        case 'nuke': {
+            // Ultimate weapon — massive damage, huge visual
+            addLog('NUCLEAR WARHEAD LAUNCHED!');
+            showCenterMsg('\u2622 NUKE INBOUND', '#ff4444', 2);
+            // Big torpedo-like projectile
+            const willMissNuke = Math.random() < 0.1; // 10% miss
+            fireTorpedo(player.pos, enemy.pos, false, willMissNuke);
+            // Override torpedo damage to be massive — add extra delayed damage
+            setTimeout(() => {
+                if (gameState !== 'BATTLE') return;
+                if (!willMissNuke) {
+                    const nukeDmg = 40;
+                    dealDamage(enemy, nukeDmg, 'player');
+                    stats.damageDealt += nukeDmg;
+                    // Massive explosion
+                    for (let i = 0; i < 5; i++) {
+                        const off = new THREE.Vector3((Math.random()-0.5)*8, (Math.random()-0.5)*4, (Math.random()-0.5)*8);
+                        spawnExplosion(enemy.pos.clone().add(off), 15, 0xffaa00, 5);
+                    }
+                    triggerShake(1.5, 25);
+                    addLog(`NUCLEAR IMPACT \u2014 ${nukeDmg} MASSIVE damage!`);
+                    showCenterMsg('DIRECT HIT!', '#ff8800', 2);
+                    if (enemy.hull <= 0) endBattle(true);
+                } else {
+                    addLog('Nuke MISSED \u2014 detonated in empty space');
+                }
+            }, 3500);
+            break;
+        }
+        case 'repair': {
+            const healed = Math.min(15, player.maxHull - player.hull);
+            player.hull = Math.min(player.maxHull, player.hull + 15);
+            spawnRepairParticles(player.pos);
+            addLog(`REPAIR initiated \u2014 +${Math.ceil(healed)} hull`);
+            showCenterMsg('REPAIRING', '#00ff88', 1);
+            // Brief green tint on hull
+            playerCarrier.userData.hullMat.emissive.setHex(0x00ff44);
+            playerCarrier.userData.hullMat.emissiveIntensity = 0.3;
+            setTimeout(() => {
+                playerCarrier.userData.hullMat.emissiveIntensity = 0;
+            }, 1500);
+            break;
+        }
+        case 'shields': {
+            player.shield = Math.min(player.maxShield * 1.5, player.shield + 20);
+            playerShieldMat.opacity = 0.5;
+            addLog('SHIELDS boosted \u2014 +20 shield');
+            showCenterMsg('SHIELDS UP', '#4488ff', 1);
+            break;
+        }
+        case 'fighters': {
+            player.fightersActive = true;
+            player.fighterTimer = 8;
+            let activated = 0;
+            for (const f of fighterPool) {
+                if (activated < 8) {
+                    f.active = true;
+                    f.angle = (activated / 8) * Math.PI * 2;
+                    f.mesh.visible = true;
+                    activated++;
+                }
+            }
+            addLog('FIGHTERS launched \u2014 8 fighters on patrol');
+            break;
+        }
+        case 'cloak': {
+            // Stealth — enemy can't fire at you for 4 seconds
+            player.cloaked = true;
+            player.cloakTimer = 4;
+            // Make player carrier semi-transparent
+            playerCarrier.traverse(child => {
+                if (child.isMesh && child.material) {
+                    child.material.transparent = true;
+                    child.material._savedOpacity = child.material.opacity;
+                    child.material.opacity = 0.15;
+                }
+            });
+            addLog('CLOAK engaged \u2014 4 seconds stealth');
+            showCenterMsg('CLOAKED', '#8844ff', 1.5);
+            break;
+        }
+        case 'emp': {
+            fireEMP();
+            enemy.jammed = true;
+            enemy.jamTimer = 3;
+            addLog('EMP fired \u2014 enemy systems jammed!');
+            showCenterMsg('SYSTEMS JAMMED', '#4488ff', 2);
+            break;
+        }
+    }
+}
+
+// ─── CLOAK TIMER ───
+function updateCloak(dt) {
+    if (player.cloaked) {
+        player.cloakTimer -= dt;
+        if (player.cloakTimer <= 0) {
+            player.cloaked = false;
+            playerCarrier.traverse(child => {
+                if (child.isMesh && child.material && child.material._savedOpacity !== undefined) {
+                    child.material.opacity = child.material._savedOpacity;
+                    child.material.transparent = child.material._savedOpacity < 1;
+                    delete child.material._savedOpacity;
+                }
+            });
+            addLog('CLOAK disengaged');
+        }
+    }
+}
+
+// ─── ENEMY AI ───
+function updateEnemyAI(dt) {
+    if (enemy.jammed) {
+        enemy.jamTimer -= dt;
+        if (enemy.jamTimer <= 0) {
+            enemy.jammed = false;
+        }
+        return;
+    }
+
+    // Can't target player while cloaked
+    if (player.cloaked) {
+        // Still do repairs/shields but skip offensive actions
+        enemy.repairCD -= dt;
+        enemy.shieldCD -= dt;
+        if (enemy.hull < enemy.maxHull * 0.4 && enemy.repairCD <= 0) {
+            enemy.repairCD = 15;
+            enemy.hull = Math.min(enemy.maxHull, enemy.hull + 15);
+            spawnRepairParticles(enemy.pos);
+            addLog('Enemy REPAIR while you are cloaked');
+        }
+        return;
+    }
+
+    enemy.laserCD -= dt;
+    enemy.missileCD -= dt;
+    enemy.bomberCD -= dt;
+    enemy.torpedoCD -= dt;
+    enemy.repairCD -= dt;
+    enemy.shieldCD -= dt;
+
+    // Repair when low
+    if (enemy.hull < enemy.maxHull * 0.4 && enemy.repairCD <= 0) {
+        enemy.repairCD = 15;
+        const healed = Math.min(15, enemy.maxHull - enemy.hull);
+        enemy.hull = Math.min(enemy.maxHull, enemy.hull + 15);
+        spawnRepairParticles(enemy.pos);
+        addLog(`Enemy REPAIR \u2014 +${Math.ceil(healed)} hull`);
+        // Green flash on enemy
+        enemyCarrier.userData.hullMat.emissive.setHex(0x00ff44);
+        enemyCarrier.userData.hullMat.emissiveIntensity = 0.3;
+        setTimeout(() => {
+            enemyCarrier.userData.hullMat.emissiveIntensity = 0;
+        }, 1500);
+    }
+
+    // Shield boost when low
+    if (enemy.shield < enemy.maxShield * 0.3 && enemy.shieldCD <= 0) {
+        enemy.shieldCD = 12;
+        enemy.shield = Math.min(enemy.maxShield * 1.5, enemy.shield + 20);
+        enemyShieldMat.opacity = 0.5;
+        addLog('Enemy SHIELDS boosted');
+    }
+
+    // Lasers
+    if (enemy.laserCD <= 0) {
+        enemy.laserCD = 4;
+        fireLasers(enemy.pos, player.pos, true);
+        const dmg = player.shield > 0 ? 5 : 3;
+        setTimeout(() => {
+            if (gameState !== 'BATTLE') return;
+            dealDamage(player, dmg, 'enemy');
+            spawnExplosion(player.pos.clone().add(new THREE.Vector3((Math.random()-0.5)*4, (Math.random()-0.5)*2, (Math.random()-0.5)*2)), 5, 0xff3333, 3);
+            cameraShake = 0.2;
+            addLog(`Enemy LASERS \u2014 ${dmg} damage`);
+        }, 100);
+    }
+
+    // Missiles
+    if (enemy.missileCD <= 0) {
+        enemy.missileCD = 10;
+        fireMissiles(enemy.pos, player.pos, true);
+        addLog('Enemy MISSILES incoming!');
+    }
+
+    // Bombers
+    if (enemy.bomberCD <= 0) {
+        enemy.bomberCD = 18;
+        launchBombers(enemy.pos, player.pos, true);
+        addLog('Enemy BOMBERS launched!');
+    }
+
+    // Torpedo
+    if (enemy.torpedoCD <= 0) {
+        enemy.torpedoCD = 25;
+        const willMiss = Math.random() < 0.2;
+        fireTorpedo(enemy.pos, player.pos, true, willMiss);
+        addLog('Enemy TORPEDO incoming!');
+    }
+}
+
+// ─── UPDATE PROJECTILES ───
+function updateProjectiles(dt) {
+    // Lasers
+    for (const l of laserPool) {
+        if (!l.active) continue;
+        l.timer -= dt;
+        l.alpha = l.timer / 0.3;
+        l.mesh.material.opacity = Math.max(0, l.alpha);
+        if (l.timer <= 0) {
+            l.active = false;
+            l.mesh.visible = false;
+        }
+    }
+
+    // Missiles
+    for (let i = 0; i < missilePool.length; i++) {
+        const m = missilePool[i];
+        if (!m.active) continue;
+        m.timer += dt;
+        const t = m.timer / m.duration;
+
+        if (t >= 1) {
+            // Arrived
+            m.active = false;
+            m.mesh.visible = false;
+            exhaustPool[i].points.visible = false;
+
+            // Check interception
+            const target = m.isEnemy ? player : enemy;
+            const defender = m.isEnemy ? player : enemy;
+            let interceptChance = 0.3;
+            if (m.isEnemy && player.fightersActive) interceptChance = 0.7;
+
+            if (Math.random() < interceptChance) {
+                spawnExplosion(m.mesh.position.clone(), 8, 0xff8800, 3);
+                addLog(m.isEnemy ? 'Missile intercepted by point defense!' : 'Enemy intercepted our missile!');
+            } else {
+                const shieldDmg = 12;
+                const hullDmg = 8;
+                const dmg = target.shield > 0 ? shieldDmg : hullDmg;
+                dealDamage(target, dmg, m.isEnemy ? 'enemy' : 'player');
+                spawnExplosion(m.isEnemy ? player.pos.clone() : enemy.pos.clone(), 20, 0xff8800, 5);
+                cameraShake = 0.25;
+                if (!m.isEnemy) stats.damageDealt += dmg;
+                addLog(m.isEnemy ? `Enemy missile hit \u2014 ${dmg} damage!` : `Missile hit \u2014 ${dmg} damage!`);
+            }
+            continue;
+        }
+
+        // Move missile along arc
+        const pos = new THREE.Vector3().lerpVectors(m.start, m.end, t);
+        pos.y += Math.sin(t * Math.PI) * m.arc;
+        m.mesh.position.copy(pos);
+        m.mesh.lookAt(m.end);
+
+        // Exhaust trail
+        const ep = exhaustPool[i];
+        for (let j = 19; j > 0; j--) {
+            ep.positions[j * 3] = ep.positions[(j-1) * 3];
+            ep.positions[j * 3 + 1] = ep.positions[(j-1) * 3 + 1];
+            ep.positions[j * 3 + 2] = ep.positions[(j-1) * 3 + 2];
+        }
+        ep.positions[0] = pos.x;
+        ep.positions[1] = pos.y;
+        ep.positions[2] = pos.z;
+        ep.points.geometry.attributes.position.needsUpdate = true;
+    }
+
+    // Bombers
+    for (const b of bomberPool) {
+        if (!b.active) continue;
+        b.timer += dt;
+
+        if (b.returning) {
+            const rt = Math.min(1, (b.timer - b.duration) / b.duration);
+            const homePos = b.isEnemy ? enemy.pos : player.pos;
+            b.mesh.position.lerpVectors(b.returnStart, homePos, rt);
+            b.mesh.position.y += Math.sin(rt * Math.PI) * 2;
+            if (rt >= 1) {
+                b.active = false;
+                b.mesh.visible = false;
+            }
+            continue;
+        }
+
+        const t = b.timer / b.duration;
+
+        if (t >= 1) {
+            // Check if intercepted
+            const target = b.isEnemy ? player : enemy;
+            const hasDefenders = b.isEnemy ? player.fightersActive : false;
+            const interceptChance = hasDefenders ? 0.6 : 0.25;
+
+            if (Math.random() < interceptChance && !b.dead) {
+                b.dead = true;
+                spawnExplosion(b.mesh.position.clone(), 3, b.isEnemy ? 0xff3333 : 0x00ccff, 2);
+                b.active = false;
+                b.mesh.visible = false;
+            } else if (!b.dead) {
+                // Hit! damage
+                const dmg = b.isEnemy ? 3.3 : 3.3; // ~20 total for 6
+                dealDamage(target, dmg, b.isEnemy ? 'enemy' : 'player');
+                if (!b.isEnemy) stats.damageDealt += dmg;
+                spawnExplosion(b.mesh.position.clone(), 4, 0xffaa00, 3);
+                // Start returning
+                b.returning = true;
+                b.returnStart.copy(b.mesh.position);
+                b.timer = b.duration; // reset for return timing
+            }
+            continue;
+        }
+
+        // Move bomber
+        const pos = new THREE.Vector3().lerpVectors(b.start, b.end, t);
+        pos.y += Math.sin(t * Math.PI) * (1 + Math.random() * 0.1);
+        // Formation wobble
+        pos.x += Math.sin(gameTime * 3 + b.start.z * 5) * 0.2;
+        pos.z += Math.cos(gameTime * 2.5 + b.start.z * 3) * 0.2;
+        b.mesh.position.copy(pos);
+        b.mesh.lookAt(b.end);
+    }
+
+    // Log bomber results when wave completes
+    // (handled individually above)
+
+    // Torpedoes
+    for (const t of torpedoPool) {
+        if (!t.active) continue;
+        t.timer += dt;
+        const progress = t.timer / t.duration;
+
+        if (progress >= 1) {
+            t.active = false;
+            t.mesh.visible = false;
+            t.trail.visible = false;
+
+            if (t.missed) {
+                addLog(t.isEnemy ? 'Enemy torpedo missed!' : 'Torpedo missed!');
+                spawnExplosion(t.mesh.position.clone(), 5, 0x4444ff, 3);
+            } else {
+                const target = t.isEnemy ? player : enemy;
+                const dmg = target.shield > 0 ? 25 : 30;
+                dealDamage(target, dmg, t.isEnemy ? 'enemy' : 'player');
+                spawnExplosion(t.isEnemy ? player.pos.clone() : enemy.pos.clone(), 40, 0xffcc00, 8);
+                cameraShake = 0.4;
+                if (!t.isEnemy) stats.damageDealt += dmg;
+                addLog(t.isEnemy ? `Enemy torpedo hit \u2014 ${dmg} DAMAGE!` : `TORPEDO HIT \u2014 ${dmg} DAMAGE!`);
+                showCenterMsg(t.isEnemy ? 'TORPEDO IMPACT!' : 'DIRECT HIT!', t.isEnemy ? '#ff4444' : '#00ff88', 1.5);
+            }
+            continue;
+        }
+
+        // Move torpedo
+        const pos = new THREE.Vector3().lerpVectors(t.start, t.end, progress);
+        t.mesh.position.copy(pos);
+        t.mesh.lookAt(t.end);
+
+        // Trail
+        for (let j = 29; j > 0; j--) {
+            t.trailPos[j * 3] = t.trailPos[(j-1) * 3];
+            t.trailPos[j * 3 + 1] = t.trailPos[(j-1) * 3 + 1];
+            t.trailPos[j * 3 + 2] = t.trailPos[(j-1) * 3 + 2];
+        }
+        t.trailPos[0] = pos.x;
+        t.trailPos[1] = pos.y;
+        t.trailPos[2] = pos.z;
+        t.trail.geometry.attributes.position.needsUpdate = true;
+    }
+
+    // Explosions
+    for (const p of explosionPool) {
+        if (!p.active) continue;
+        p.timer -= dt;
+        p.mesh.position.add(p.velocity.clone().multiplyScalar(dt));
+        p.velocity.multiplyScalar(0.95);
+        p.mat.opacity = Math.max(0, p.timer / 0.8);
+        if (p.timer <= 0) {
+            p.active = false;
+            p.mesh.visible = false;
+        }
+    }
+
+    // Repair particles
+    for (const p of repairPool) {
+        if (!p.active) continue;
+        p.timer -= dt;
+        p.mesh.position.add(p.velocity.clone().multiplyScalar(dt));
+        p.mat.opacity = Math.max(0, p.timer / 2);
+        if (p.timer <= 0) {
+            p.active = false;
+            p.mesh.visible = false;
+        }
+    }
+
+    // EMP ring
+    if (empRingActive) {
+        empRingTimer -= dt;
+        empRingScale += dt * 25;
+        empRing.scale.set(empRingScale, empRingScale, empRingScale);
+        empRingMat.opacity = Math.max(0, empRingTimer / 1.5) * 0.8;
+        empRing.position.lerpVectors(PLAYER_POS, ENEMY_POS, 1 - empRingTimer / 1.5);
+        if (empRingTimer <= 0) {
+            empRingActive = false;
+            empRing.visible = false;
+        }
+    }
+
+    // Fighters orbiting
+    if (player.fightersActive) {
+        player.fighterTimer -= dt;
+        if (player.fighterTimer <= 0) {
+            player.fightersActive = false;
+            for (const f of fighterPool) {
+                f.active = false;
+                f.mesh.visible = false;
+            }
+        } else {
+            for (const f of fighterPool) {
+                if (!f.active) continue;
+                f.angle += dt * f.speed * 1.5;
+                const radius = 6 + Math.sin(f.angle * 0.3) * 1;
+                f.mesh.position.set(
+                    player.pos.x + Math.cos(f.angle) * radius,
+                    player.pos.y + Math.sin(f.angle * 2) * 1.5,
+                    player.pos.z + Math.sin(f.angle) * radius
+                );
+                // Face direction of travel
+                const nextAngle = f.angle + 0.1;
+                const nextPos = new THREE.Vector3(
+                    player.pos.x + Math.cos(nextAngle) * radius,
+                    player.pos.y + Math.sin(nextAngle * 2) * 1.5,
+                    player.pos.z + Math.sin(nextAngle) * radius
+                );
+                f.mesh.lookAt(nextPos);
+            }
+        }
+    }
+}
+
+// ─── DAMAGE VISUALS ───
+function updateDamageVisuals(dt) {
+    // Player flash
+    if (player.flashTimer > 0) {
+        player.flashTimer -= dt;
+        playerCarrier.userData.hullMat.emissive.setHex(0xff0000);
+        playerCarrier.userData.hullMat.emissiveIntensity = player.flashTimer * 5;
+    }
+
+    // Enemy flash
+    if (enemy.flashTimer > 0) {
+        enemy.flashTimer -= dt;
+        enemyCarrier.userData.hullMat.emissive.setHex(0xffffff);
+        enemyCarrier.userData.hullMat.emissiveIntensity = enemy.flashTimer * 5;
+    }
+
+    // Shield fade
+    // Shield always visible when shield HP > 0 (pulsing gently)
+    const pShieldPct = player.shield / player.maxShield;
+    const shieldPulse = Math.sin(gameTime * 2) * 0.03;
+    playerShieldMat.opacity = pShieldPct > 0 ? pShieldPct * 0.12 + 0.03 + shieldPulse : 0;
+
+    const eShieldPct = enemy.shield / enemy.maxShield;
+    enemyShieldMat.opacity = eShieldPct > 0 ? eShieldPct * 0.1 + 0.02 + shieldPulse : 0;
+    if (enemyShieldMat.opacity > 0) {
+        enemyShieldMat.opacity = Math.max(0, enemyShieldMat.opacity - dt * 0.8);
+    }
+
+    // Enemy jammed flicker
+    if (enemy.jammed) {
+        enemyCarrier.userData.hullMat.emissive.setHex(0x4488ff);
+        enemyCarrier.userData.hullMat.emissiveIntensity = Math.random() * 0.5;
+    }
+
+    // Smoke for low HP carriers
+    updateSmoke(dt);
+
+    // Fire cubes for critical HP
+    updateFires(dt);
+}
+
+let smokeSpawnTimer = 0;
+function updateSmoke(dt) {
+    smokeSpawnTimer -= dt;
+
+    // Spawn smoke for damaged carriers
+    if (smokeSpawnTimer <= 0) {
+        let spawned = false;
+        if (player.hull < player.maxHull * 0.3) {
+            for (const s of smokePool) {
+                if (!s.active) {
+                    s.active = true;
+                    s.timer = 1.5 + Math.random();
+                    s.mesh.position.set(
+                        player.pos.x + (Math.random() - 0.5) * 6,
+                        player.pos.y + (Math.random() - 0.5) * 2,
+                        player.pos.z + (Math.random() - 0.5) * 3
+                    );
+                    s.velocity.set((Math.random() - 0.5) * 0.5, 0.5 + Math.random(), (Math.random() - 0.5) * 0.5);
+                    s.mesh.visible = true;
+                    s.mat.opacity = 0.5;
+                    s.owner = 'player';
+                    spawned = true;
+                    break;
+                }
+            }
+        }
+        if (enemy.hull < enemy.maxHull * 0.3) {
+            for (const s of smokePool) {
+                if (!s.active) {
+                    s.active = true;
+                    s.timer = 1.5 + Math.random();
+                    s.mesh.position.set(
+                        enemy.pos.x + (Math.random() - 0.5) * 6,
+                        enemy.pos.y + (Math.random() - 0.5) * 2,
+                        enemy.pos.z + (Math.random() - 0.5) * 3
+                    );
+                    s.velocity.set((Math.random() - 0.5) * 0.5, 0.5 + Math.random(), (Math.random() - 0.5) * 0.5);
+                    s.mesh.visible = true;
+                    s.mat.opacity = 0.5;
+                    s.owner = 'enemy';
+                    spawned = true;
+                    break;
+                }
+            }
+        }
+        if (spawned) smokeSpawnTimer = 0.15;
+    }
+
+    // Update smoke
+    for (const s of smokePool) {
+        if (!s.active) continue;
+        s.timer -= dt;
+        s.mesh.position.add(s.velocity.clone().multiplyScalar(dt));
+        s.mesh.scale.addScalar(dt * 0.5);
+        s.mat.opacity = Math.max(0, (s.timer / 2) * 0.5);
+        if (s.timer <= 0) {
+            s.active = false;
+            s.mesh.visible = false;
+            s.mesh.scale.set(1, 1, 1);
+        }
+    }
+}
+
+function updateFires(dt) {
+    // Position fire cubes on critically damaged carriers
+    let fireIdx = 0;
+    const critPositions = [
+        new THREE.Vector3(-2, 0.5, 1), new THREE.Vector3(3, 0, -1),
+        new THREE.Vector3(-1, -0.3, 0.5), new THREE.Vector3(2, 0.8, -0.5),
+        new THREE.Vector3(0, 0.2, 1.2)
+    ];
+
+    if (player.hull < player.maxHull * 0.15) {
+        for (let i = 0; i < 5 && fireIdx < firePool.length; i++, fireIdx++) {
+            const f = firePool[fireIdx];
+            f.mesh.visible = true;
+            f.mesh.position.set(
+                player.pos.x + critPositions[i].x,
+                player.pos.y + critPositions[i].y + Math.sin(gameTime * 5 + i) * 0.1,
+                player.pos.z + critPositions[i].z
+            );
+            f.flicker += dt * 10;
+            f.mat.opacity = 0.5 + Math.sin(f.flicker) * 0.3;
+        }
+    }
+    if (enemy.hull < enemy.maxHull * 0.15) {
+        for (let i = 0; i < 5 && fireIdx < firePool.length; i++, fireIdx++) {
+            const f = firePool[fireIdx];
+            f.mesh.visible = true;
+            f.mesh.position.set(
+                enemy.pos.x + critPositions[i].x,
+                enemy.pos.y + critPositions[i].y + Math.sin(gameTime * 5 + i) * 0.1,
+                enemy.pos.z + critPositions[i].z
+            );
+            f.flicker += dt * 10;
+            f.mat.opacity = 0.5 + Math.sin(f.flicker) * 0.3;
+        }
+    }
+
+    // Hide unused fire cubes
+    for (let i = fireIdx; i < firePool.length; i++) {
+        firePool[i].mesh.visible = false;
+        firePool[i].mat.opacity = 0;
+    }
+}
+
+// ─── CAMERA (player-controlled + shake) ───
+const camBasePos = new THREE.Vector3();
+function updateCamera(dt) {
+    controls.update();
+
+    // Camera shake (offset from current position briefly)
+    if (cameraShake > 0) {
+        camera.position.x += (Math.random() - 0.5) * cameraShake * 3;
+        camera.position.y += (Math.random() - 0.5) * cameraShake * 3;
+        camera.position.z += (Math.random() - 0.5) * cameraShake * 3;
+        cameraShake = Math.max(0, cameraShake - dt * 2);
+    }
+}
+
+// ─── SHIELD REGEN ───
+function updateShieldRegen(dt) {
+    if (player.shield < player.maxShield) {
+        player.shield = Math.min(player.maxShield, player.shield + player.shieldRegen * dt);
+    }
+    // Decay excess shields
+    if (player.shield > player.maxShield) {
+        player.shield = Math.max(player.maxShield, player.shield - 2 * dt);
+    }
+    if (enemy.shield < enemy.maxShield) {
+        enemy.shield = Math.min(enemy.maxShield, enemy.shield + enemy.shieldRegen * dt);
+    }
+    if (enemy.shield > enemy.maxShield) {
+        enemy.shield = Math.max(enemy.maxShield, enemy.shield - 2 * dt);
+    }
+}
+
+// ─── COOLDOWNS ───
+function updateCooldowns(dt) {
+    for (const def of Object.values(ACTION_DEFS)) {
+        if (def.current > 0) {
+            def.current = Math.max(0, def.current - dt);
+        }
+    }
+}
+
+// ─── START/END ───
+function startBattle() {
+    gameState = 'BATTLE';
+    battleTime = 0;
+    document.getElementById('startscreen').style.display = 'none';
+
+    // Reset state
+    player.hull = PLAYER_MAX_HULL;
+    player.shield = PLAYER_MAX_SHIELD;
+    player.fightersActive = false;
+    player.fighterTimer = 0;
+    enemy.hull = ENEMY_MAX_HULL;
+    enemy.shield = ENEMY_MAX_SHIELD;
+    enemy.jammed = false;
+    enemy.jamTimer = 0;
+    enemy.laserCD = 2;
+    enemy.missileCD = 6;
+    enemy.bomberCD = 12;
+    enemy.torpedoCD = 18;
+    enemy.repairCD = 10;
+    enemy.shieldCD = 8;
+
+    for (const def of Object.values(ACTION_DEFS)) {
+        def.current = 0;
+    }
+
+    stats = { damageDealt: 0, actionsUsed: 0, time: 0 };
+    logEntries.length = 0;
+    renderLog();
+
+    // Clean up pools
+    cleanupPools();
+
+    addLog('Battle stations! Engage the enemy!');
+    showCenterMsg('BATTLE STATIONS!', '#4488ff', 2);
+}
+
+function cleanupPools() {
+    laserPool.forEach(l => { l.active = false; l.mesh.visible = false; });
+    missilePool.forEach(m => { m.active = false; m.mesh.visible = false; });
+    exhaustPool.forEach(e => { e.points.visible = false; });
+    bomberPool.forEach(b => { b.active = false; b.mesh.visible = false; });
+    torpedoPool.forEach(t => { t.active = false; t.mesh.visible = false; t.trail.visible = false; });
+    explosionPool.forEach(p => { p.active = false; p.mesh.visible = false; });
+    repairPool.forEach(p => { p.active = false; p.mesh.visible = false; });
+    fighterPool.forEach(f => { f.active = false; f.mesh.visible = false; });
+    smokePool.forEach(s => { s.active = false; s.mesh.visible = false; s.mesh.scale.set(1,1,1); });
+    firePool.forEach(f => { f.mesh.visible = false; f.mat.opacity = 0; });
+    empRingActive = false;
+    empRing.visible = false;
+    playerShieldMat.opacity = 0;
+    enemyShieldMat.opacity = 0;
+    playerCarrier.userData.hullMat.emissiveIntensity = 0;
+    enemyCarrier.userData.hullMat.emissiveIntensity = 0;
+}
+
+function endBattle(playerWon) {
+    gameState = 'END';
+    stats.time = battleTime;
+
+    const endscreen = document.getElementById('endscreen');
+    const endtitle = document.getElementById('endtitle');
+    const endstats = document.getElementById('endstats');
+
+    endtitle.textContent = playerWon ? 'VICTORY' : 'DEFEAT';
+    endtitle.style.color = playerWon ? '#00ff88' : '#ff4444';
+
+    const mins = Math.floor(stats.time / 60);
+    const secs = Math.floor(stats.time % 60);
+    endstats.innerHTML = `
+        TIME: ${mins}:${secs.toString().padStart(2, '0')}<br>
+        DAMAGE DEALT: ${Math.ceil(stats.damageDealt)}<br>
+        ACTIONS USED: ${stats.actionsUsed}<br>
+        HULL REMAINING: ${Math.ceil(player.hull)}/${player.maxHull}<br>
+        ENEMY HULL: ${Math.ceil(enemy.hull)}/${enemy.maxHull}
+    `;
+
+    endscreen.style.display = 'flex';
+
+    if (playerWon) {
+        showCenterMsg('ENEMY DESTROYED!', '#00ff88', 3);
+        // Big explosion on enemy
+        for (let i = 0; i < 3; i++) {
+            setTimeout(() => {
+                spawnExplosion(
+                    enemy.pos.clone().add(new THREE.Vector3((Math.random()-0.5)*8, (Math.random()-0.5)*3, (Math.random()-0.5)*4)),
+                    30, 0xffaa00, 10
+                );
+            }, i * 300);
+        }
+    } else {
+        showCenterMsg('CARRIER DESTROYED', '#ff4444', 3);
+        for (let i = 0; i < 3; i++) {
+            setTimeout(() => {
+                spawnExplosion(
+                    player.pos.clone().add(new THREE.Vector3((Math.random()-0.5)*8, (Math.random()-0.5)*3, (Math.random()-0.5)*4)),
+                    30, 0xff4400, 10
+                );
+            }, i * 300);
+        }
+    }
+}
+
+function restartBattle() {
+    document.getElementById('endscreen').style.display = 'none';
+    startBattle();
+}
+
+// ─── CENTER MSG FADE ───
+function updateCenterMsg(dt) {
+    if (centerMsgTimer > 0) {
+        centerMsgTimer -= dt;
+        if (centerMsgTimer <= 0) {
+            centerMsgEl.style.display = 'none';
+        } else if (centerMsgTimer < 0.5) {
+            centerMsgEl.style.opacity = centerMsgTimer / 0.5;
+        } else {
+            centerMsgEl.style.opacity = '1';
+        }
+    }
+}
+
+// ─── LOG AGING ───
+function updateLogAging(dt) {
+    for (const e of logEntries) {
+        e.age += dt * 0.3;
+    }
+    // Re-render occasionally
+    if (Math.random() < dt * 2) renderLog();
+}
+
+// ─── CARRIER IDLE ANIMATION ───
+function updateCarrierIdle(dt) {
+    playerCarrier.position.y = PLAYER_POS.y + Math.sin(gameTime * 0.3) * 0.15;
+    playerCarrier.rotation.z = Math.sin(gameTime * 0.2) * 0.01;
+    enemyCarrier.position.y = ENEMY_POS.y + Math.sin(gameTime * 0.35 + 1) * 0.15;
+    enemyCarrier.rotation.z = Math.sin(gameTime * 0.25 + 1) * 0.01;
+}
+
+// ─── FPS ───
+const fpsEl = document.getElementById('fps');
+let fpsFrames = 0;
+let fpsTime = 0;
+
+// ─── MAIN LOOP ───
+let lastTime = 0;
+
+function animate(timestamp) {
+    requestAnimationFrame(animate);
+    const ts = timestamp * 0.001;
+    const dt = Math.min(0.05, ts - lastTime);
+    lastTime = ts;
+    gameTime += dt;
+
+    // FPS
+    fpsFrames++;
+    fpsTime += dt;
+    if (fpsTime >= 1) {
+        fpsEl.textContent = Math.round(fpsFrames / fpsTime) + ' FPS';
+        fpsFrames = 0;
+        fpsTime = 0;
+    }
+
+    updateCamera(dt);
+    updateCarrierIdle(dt);
+    updateCenterMsg(dt);
+
+    if (gameState === 'BATTLE') {
+        battleTime += dt;
+        updateCooldowns(dt);
+        updateShieldRegen(dt);
+        updateCloak(dt);
+        updateEnemyAI(dt);
+        updateLogAging(dt);
+    }
+
+    // Always update projectiles/visuals for post-battle explosions
+    updateProjectiles(dt);
+    updateDamageVisuals(dt);
+    updateHUD();
+
+    renderer.render(scene, camera);
+}
+
+// ─── RESIZE ───
+window.addEventListener('resize', () => {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+// ─── KICK OFF ───
+animate(0);
+
+</script>
+</body>
+</html>

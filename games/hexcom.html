@@ -1,0 +1,1341 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0,user-scalable=no">
+<title>HEXCOM</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{width:100%;height:100%;overflow:hidden;background:#0a0a15;touch-action:none;-webkit-touch-callout:none;-webkit-user-select:none;user-select:none}
+canvas#game{display:block;position:fixed;top:0;left:0;z-index:0}
+@keyframes blink{0%,49%{opacity:1}50%,100%{opacity:0}}
+@keyframes pulseGlow{0%,100%{opacity:0.6}50%{opacity:1}}
+#energy{position:fixed;top:12px;left:50%;transform:translateX(-50%);font-family:'Courier New',monospace;font-size:16px;color:#ffcc00;z-index:10;pointer-events:none}
+#waveinfo{position:fixed;top:12px;right:12px;font-family:'Courier New',monospace;font-size:12px;color:#888;z-index:10;pointer-events:none;text-align:right;white-space:pre-line}
+#hqhealth{position:fixed;top:36px;left:50%;transform:translateX(-50%);font-family:'Courier New',monospace;font-size:11px;color:#00ff88;z-index:10;pointer-events:none;white-space:nowrap}
+#buildmenu{display:none;position:fixed;bottom:60px;left:50%;transform:translateX(-50%);z-index:15;gap:8px;font-family:'Courier New',monospace;flex-wrap:wrap;justify-content:center}
+.build-btn{background:#222;color:#fff;border:2px solid #888;padding:10px 14px;border-radius:6px;font-family:'Courier New',monospace;font-size:12px;cursor:pointer;-webkit-tap-highlight-color:transparent;transition:opacity 0.15s}
+.build-btn:active{transform:scale(0.95)}
+.build-btn.disabled{opacity:0.35;pointer-events:none}
+#sellbtn{display:none;position:fixed;bottom:60px;left:50%;transform:translateX(-50%);z-index:15}
+#sellbtn button{background:#441111;color:#ff4444;border:2px solid #ff4444;padding:10px 20px;border-radius:6px;font-family:'Courier New',monospace;font-size:12px;cursor:pointer;-webkit-tap-highlight-color:transparent}
+#sellbtn button:active{transform:scale(0.95)}
+#infobar{display:none;position:fixed;bottom:110px;left:50%;transform:translateX(-50%);z-index:15;font-family:'Courier New',monospace;font-size:11px;color:#ccc;background:rgba(0,0,0,0.8);padding:6px 14px;border-radius:6px;border:1px solid #444;pointer-events:none;white-space:nowrap}
+#fps{position:fixed;top:12px;left:12px;font-family:'Courier New',monospace;font-size:10px;color:#ffcc00;z-index:10;pointer-events:none}
+#back{position:fixed;top:28px;left:12px;font-family:'Courier New',monospace;font-size:10px;color:#00ff88;text-decoration:none;z-index:10}
+#startscreen{position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:20;display:flex;flex-direction:column;align-items:center;justify-content:center;font-family:'Courier New',monospace;color:#fff}
+#startscreen h1{font-size:28px;color:#00ff88;margin-bottom:8px;letter-spacing:3px}
+#startscreen .sub{font-size:12px;color:#888;margin-bottom:4px}
+#startscreen .tap{font-size:16px;color:#00ff88;margin-top:20px;animation:blink 1s step-end infinite}
+#gameover{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:20;flex-direction:column;align-items:center;justify-content:center;font-family:'Courier New',monospace;color:#fff}
+#gameover h1{font-size:28px;color:#ff4444;margin-bottom:8px}
+#gameover .sub{font-size:14px;color:#888;margin-bottom:24px}
+#gameover .tap{font-size:14px;color:#888;animation:blink 1s step-end infinite}
+</style>
+</head>
+<body>
+
+<div id="energy">⚡ 100</div>
+<div id="waveinfo">WAVE 1 · NEXT: 20s</div>
+<div id="hqhealth">HQ: ████████████████████ 20/20</div>
+
+<div id="buildmenu">
+    <button class="build-btn" data-type="wall" style="border-color:#888">🧱 Wall<br><span style="color:#ffcc00;font-size:10px">10⚡</span></button>
+    <button class="build-btn" data-type="generator" style="border-color:#44ff44">⚡ Gen<br><span style="color:#ffcc00;font-size:10px">25⚡</span></button>
+    <button class="build-btn" data-type="tower" style="border-color:#00ccff">🗼 Tower<br><span style="color:#ffcc00;font-size:10px">30⚡</span></button>
+    <button class="build-btn" data-type="barracks" style="border-color:#ff8800">⚔ Barracks<br><span style="color:#ffcc00;font-size:10px">40⚡</span></button>
+</div>
+
+<div id="sellbtn"><button>SELL (50% refund)</button></div>
+<div id="infobar"></div>
+
+<div id="fps">-- FPS</div>
+<a id="back" href="../index.html">← back</a>
+
+<div id="startscreen">
+    <h1>HEXCOM</h1>
+    <p class="sub">TAP HEX TO BUILD · DEFEND YOUR HQ</p>
+    <p class="sub">WALLS · GENERATORS · TOWERS · BARRACKS</p>
+    <p class="sub">FUNNEL ENEMIES INTO KILL ZONES</p>
+    <p class="sub" style="margin-top:8px;color:#aaa">DESKTOP: CLICK + KEYS 1-4</p>
+    <p class="tap">TAP TO START</p>
+</div>
+
+<div id="gameover">
+    <h1>HQ DESTROYED</h1>
+    <p class="sub" id="finalwave">SURVIVED 0 WAVES</p>
+    <p class="tap">TAP TO RETRY</p>
+</div>
+
+<canvas id="game"></canvas>
+
+<script type="importmap">
+{ "imports": { "three": "https://unpkg.com/three@0.160.0/build/three.module.js" } }
+</script>
+<script type="module">
+import * as THREE from 'three';
+
+/* ──────────────── CONSTANTS ──────────────── */
+const HEX_SIZE = 0.95;
+const GAP = 0.05;
+const S = HEX_SIZE + GAP;
+const GRID_RADIUS = 7;
+const HQ_POS = { q: 0, r: 5 };
+const HEX_DIRS = [{q:1,r:0},{q:0,r:1},{q:-1,r:1},{q:-1,r:0},{q:0,r:-1},{q:1,r:-1}];
+
+const COSTS = { wall: 10, generator: 25, tower: 30, barracks: 40 };
+const SELL_RATIO = 0.5;
+const BASE_ENERGY_RATE = 2; // per second
+const GEN_ENERGY = 5; // per gen per 5 sec
+const TOWER_RANGE = 3;
+const TOWER_FIRE_RATE = 1.5; // seconds
+const TOWER_DAMAGE = 1;
+const PROJECTILE_SPEED = 0.3; // seconds travel
+const WAVE_INTERVAL = 20; // seconds
+const MAX_ENEMIES = 30;
+const MAX_PROJECTILES = 20;
+const MAX_SOLDIERS = 5;
+const WALL_HP = 8;
+const HQ_MAX_HP = 20;
+const BARRACKS_SPAWN_TIME = 10; // seconds
+
+/* ──────────────── DOM refs ──────────────── */
+const elEnergy = document.getElementById('energy');
+const elWave = document.getElementById('waveinfo');
+const elHQ = document.getElementById('hqhealth');
+const elBuild = document.getElementById('buildmenu');
+const elSell = document.getElementById('sellbtn');
+const elInfo = document.getElementById('infobar');
+const elFPS = document.getElementById('fps');
+const elStart = document.getElementById('startscreen');
+const elGameOver = document.getElementById('gameover');
+const elFinalWave = document.getElementById('finalwave');
+const canvas = document.getElementById('game');
+
+/* ──────────────── THREE.js setup ──────────────── */
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setClearColor(0x0a0a15);
+
+const aspect = window.innerWidth / window.innerHeight;
+const frustum = 14;
+const camera = new THREE.OrthographicCamera(
+    -frustum * aspect, frustum * aspect,
+    frustum, -frustum, 0.1, 100
+);
+// Isometric 45°
+camera.position.set(14, 18, 14);
+camera.lookAt(0, 0, 2);
+camera.updateProjectionMatrix();
+
+const scene = new THREE.Scene();
+
+// Lighting
+const ambientLight = new THREE.AmbientLight(0x334455, 1.2);
+scene.add(ambientLight);
+const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+dirLight.position.set(8, 15, 10);
+scene.add(dirLight);
+const hemiLight = new THREE.HemisphereLight(0x223344, 0x111122, 0.5);
+scene.add(hemiLight);
+
+/* ──────────────── HEX MATH ──────────────── */
+function hexToWorld(q, r) {
+    return { x: S * 1.5 * q, z: S * Math.sqrt(3) * (r + q / 2) };
+}
+function hexDist(q1, r1, q2, r2) {
+    const dq = q1 - q2, dr = r1 - r2;
+    return Math.max(Math.abs(dq), Math.abs(dr), Math.abs(dq + dr));
+}
+function hexKey(q, r) { return q + ',' + r; }
+function parseKey(k) { const p = k.split(','); return { q: +p[0], r: +p[1] }; }
+
+function hexNeighbors(q, r) {
+    return HEX_DIRS.map(d => ({ q: q + d.q, r: r + d.r }));
+}
+
+// Generate all hexes within radius
+const ALL_HEXES = [];
+for (let q = -GRID_RADIUS; q <= GRID_RADIUS; q++) {
+    for (let r = -GRID_RADIUS; r <= GRID_RADIUS; r++) {
+        if (Math.abs(q + r) <= GRID_RADIUS) {
+            ALL_HEXES.push({ q, r });
+        }
+    }
+}
+
+/* ──────────────── GAME STATE ──────────────── */
+let gameState = 'START'; // START, PLAYING, GAME_OVER
+let energy = 100;
+let waveNum = 0;
+let waveTimer = WAVE_INTERVAL;
+let hqHP = HQ_MAX_HP;
+let genTimer = 0;
+let selectedHex = null; // {q,r} or null
+let buildMode = null; // 'wall','generator','tower','barracks' or null
+
+const grid = new Map(); // key -> { type, mesh, hp, extras }
+const hexMeshes = new Map(); // key -> base hex cylinder mesh
+const enemies = []; // { q, r, type, hp, maxHp, mesh, path, pathIdx, moveTimer, speed, reward, attackTimer }
+const projectiles = []; // { mesh, from, to, timer, duration, damage, targetEnemy }
+const soldiers = []; // { q, r, mesh, hp, barracksKey, attackTimer, moveTimer, targetEnemy }
+const barracksTimers = new Map(); // barracksKey -> { timer, soldier }
+
+/* ──────────────── GEOMETRY / MATERIALS ──────────────── */
+// Hex base tile
+const hexGeo = new THREE.CylinderGeometry(HEX_SIZE, HEX_SIZE, 0.1, 6, 1);
+const hexMatDefault = new THREE.MeshStandardMaterial({ color: 0x111822, roughness: 0.8 });
+const hexMatSelected = new THREE.MeshStandardMaterial({ color: 0x224422, emissive: 0x113311, roughness: 0.5 });
+const hexEdgeMat = new THREE.MeshBasicMaterial({ color: 0x1a3322, wireframe: true });
+
+// Selection ring
+const ringGeo = new THREE.RingGeometry(HEX_SIZE * 0.85, HEX_SIZE, 6);
+const ringMat = new THREE.MeshBasicMaterial({ color: 0x00ff88, side: THREE.DoubleSide, transparent: true, opacity: 0.7 });
+const selectionRing = new THREE.Mesh(ringGeo, ringMat);
+selectionRing.rotation.x = -Math.PI / 2;
+selectionRing.rotation.z = Math.PI / 6;
+selectionRing.visible = false;
+scene.add(selectionRing);
+
+// Ghost preview
+let ghostMesh = null;
+const ghostMatValid = new THREE.MeshStandardMaterial({ color: 0x00ff44, transparent: true, opacity: 0.35 });
+const ghostMatInvalid = new THREE.MeshStandardMaterial({ color: 0xff2222, transparent: true, opacity: 0.35 });
+
+// Building geometries
+const wallGeo = new THREE.BoxGeometry(0.7, 0.6, 0.7);
+const wallMat = new THREE.MeshStandardMaterial({ color: 0x666666, roughness: 0.7 });
+
+const genGeo = new THREE.CylinderGeometry(0.3, 0.35, 0.7, 8);
+const genMat = new THREE.MeshStandardMaterial({ color: 0x22aa44, emissive: 0x115522, roughness: 0.4 });
+
+const towerBaseGeo = new THREE.CylinderGeometry(0.25, 0.35, 0.5, 8);
+const towerTopGeo = new THREE.SphereGeometry(0.18, 8, 6);
+const towerMat = new THREE.MeshStandardMaterial({ color: 0x0088cc, emissive: 0x004466, roughness: 0.3 });
+
+const barracksGeo = new THREE.BoxGeometry(0.6, 0.45, 0.6);
+const barracksMat = new THREE.MeshStandardMaterial({ color: 0xcc6600, emissive: 0x553300, roughness: 0.5 });
+
+// Enemy geometries
+const gruntGeo = new THREE.BoxGeometry(0.35, 0.35, 0.35);
+const gruntMat = new THREE.MeshStandardMaterial({ color: 0xcc2222, emissive: 0x441111 });
+
+const tankGeo = new THREE.BoxGeometry(0.5, 0.45, 0.5);
+const tankMat = new THREE.MeshStandardMaterial({ color: 0xaa1111, emissive: 0x551111 });
+
+const speedGeo = new THREE.OctahedronGeometry(0.2);
+const speedMat = new THREE.MeshStandardMaterial({ color: 0xff4444, emissive: 0x661111 });
+
+// Projectile
+const projGeo = new THREE.SphereGeometry(0.08, 6, 4);
+const projMat = new THREE.MeshBasicMaterial({ color: 0x00ffff });
+
+// Soldier
+const soldierGeo = new THREE.BoxGeometry(0.25, 0.3, 0.25);
+const soldierMat = new THREE.MeshStandardMaterial({ color: 0x00ccaa, emissive: 0x004433 });
+
+// HQ
+const hqMat = new THREE.MeshStandardMaterial({ color: 0x00cc66, emissive: 0x00aa44, roughness: 0.3 });
+
+// Health bar
+const hpBarGeo = new THREE.PlaneGeometry(1, 0.1);
+const hpBarBgMat = new THREE.MeshBasicMaterial({ color: 0x331111, side: THREE.DoubleSide });
+const hpBarFgMat = new THREE.MeshBasicMaterial({ color: 0x00ff66, side: THREE.DoubleSide });
+
+/* ──────────────── BUILD HEX GRID ──────────────── */
+function buildGrid() {
+    for (const { q, r } of ALL_HEXES) {
+        const pos = hexToWorld(q, r);
+        const hex = new THREE.Mesh(hexGeo, hexMatDefault.clone());
+        hex.position.set(pos.x, 0, pos.z);
+        hex.rotation.y = Math.PI / 6;
+        hex.userData = { q, r };
+        scene.add(hex);
+        hexMeshes.set(hexKey(q, r), hex);
+
+        // Wireframe edge
+        const edge = new THREE.Mesh(hexGeo, hexEdgeMat);
+        edge.position.set(pos.x, 0.06, pos.z);
+        edge.rotation.y = Math.PI / 6;
+        scene.add(edge);
+    }
+}
+
+/* ──────────────── HQ ──────────────── */
+let hqMeshGroup;
+function buildHQ() {
+    const pos = hexToWorld(HQ_POS.q, HQ_POS.r);
+    hqMeshGroup = new THREE.Group();
+    // Main body
+    const body = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.8, 0.7), hqMat);
+    body.position.y = 0.45;
+    hqMeshGroup.add(body);
+    // Top
+    const top = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.3, 0.5), hqMat.clone());
+    top.material.emissive.set(0x00ff66);
+    top.position.y = 0.95;
+    hqMeshGroup.add(top);
+    // Antenna
+    const ant = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.5, 4), new THREE.MeshBasicMaterial({ color: 0x00ff88 }));
+    ant.position.y = 1.35;
+    hqMeshGroup.add(ant);
+    // Beacon glow
+    const beacon = new THREE.PointLight(0x00ff88, 2, 6);
+    beacon.position.y = 1.5;
+    hqMeshGroup.add(beacon);
+
+    hqMeshGroup.position.set(pos.x, 0, pos.z);
+    scene.add(hqMeshGroup);
+
+    grid.set(hexKey(HQ_POS.q, HQ_POS.r), { type: 'hq', mesh: hqMeshGroup, hp: HQ_MAX_HP });
+}
+
+/* ──────────────── BUILDING CREATION ──────────────── */
+function createBuildingMesh(type) {
+    const g = new THREE.Group();
+    switch (type) {
+        case 'wall': {
+            const m = new THREE.Mesh(wallGeo, wallMat.clone());
+            m.position.y = 0.35;
+            g.add(m);
+            break;
+        }
+        case 'generator': {
+            const m = new THREE.Mesh(genGeo, genMat.clone());
+            m.position.y = 0.4;
+            g.add(m);
+            // glow ring
+            const ring = new THREE.Mesh(
+                new THREE.TorusGeometry(0.35, 0.03, 8, 16),
+                new THREE.MeshBasicMaterial({ color: 0x44ff44, transparent: true, opacity: 0.5 })
+            );
+            ring.rotation.x = Math.PI / 2;
+            ring.position.y = 0.15;
+            g.add(ring);
+            g.userData.glowRing = ring;
+            break;
+        }
+        case 'tower': {
+            const base = new THREE.Mesh(towerBaseGeo, towerMat.clone());
+            base.position.y = 0.3;
+            g.add(base);
+            const top = new THREE.Mesh(towerTopGeo, towerMat.clone());
+            top.material.emissive.set(0x0066aa);
+            top.position.y = 0.65;
+            g.add(top);
+            g.userData.firePoint = new THREE.Vector3(0, 0.65, 0);
+            break;
+        }
+        case 'barracks': {
+            const m = new THREE.Mesh(barracksGeo, barracksMat.clone());
+            m.position.y = 0.3;
+            g.add(m);
+            // Flag
+            const flag = new THREE.Mesh(
+                new THREE.PlaneGeometry(0.2, 0.15),
+                new THREE.MeshBasicMaterial({ color: 0xff8800, side: THREE.DoubleSide })
+            );
+            flag.position.set(0.15, 0.7, 0);
+            g.add(flag);
+            const pole = new THREE.Mesh(
+                new THREE.CylinderGeometry(0.015, 0.015, 0.4, 4),
+                new THREE.MeshBasicMaterial({ color: 0x888888 })
+            );
+            pole.position.set(0.15, 0.52, 0);
+            g.add(pole);
+            break;
+        }
+    }
+    return g;
+}
+
+function placeBuilding(q, r, type) {
+    const key = hexKey(q, r);
+    if (grid.has(key)) return false;
+    if (q === HQ_POS.q && r === HQ_POS.r) return false;
+
+    const cost = COSTS[type];
+    if (energy < cost) return false;
+
+    // For walls, check we don't fully block all paths
+    // (simple check: just place it and verify BFS can reach HQ from at least one spawn)
+    // We'll do it optimistically and skip the check for simplicity if grid is small
+    energy -= cost;
+
+    const mesh = createBuildingMesh(type);
+    const pos = hexToWorld(q, r);
+    mesh.position.set(pos.x, 0, pos.z);
+    scene.add(mesh);
+
+    const hp = type === 'wall' ? WALL_HP : (type === 'generator' ? 5 : (type === 'tower' ? 6 : 8));
+    const entry = { type, mesh, hp, maxHp: hp };
+
+    if (type === 'tower') {
+        entry.fireTimer = 0;
+    }
+    if (type === 'barracks') {
+        barracksTimers.set(key, { timer: 3, soldier: null });
+    }
+
+    grid.set(key, entry);
+
+    // Recalc enemy paths
+    for (const e of enemies) {
+        e.path = null; e.noPath = false;
+    }
+
+    updateBuildButtons();
+    return true;
+}
+
+function sellBuilding(q, r) {
+    const key = hexKey(q, r);
+    const entry = grid.get(key);
+    if (!entry || entry.type === 'hq') return;
+
+    const refund = Math.floor(COSTS[entry.type] * SELL_RATIO);
+    energy += refund;
+
+    scene.remove(entry.mesh);
+    grid.delete(key);
+
+    // Remove soldier if barracks
+    if (entry.type === 'barracks') {
+        barracksTimers.delete(key);
+        const idx = soldiers.findIndex(s => s.barracksKey === key);
+        if (idx >= 0) {
+            scene.remove(soldiers[idx].mesh);
+            soldiers.splice(idx, 1);
+        }
+    }
+
+    // Recalc enemy paths
+    for (const e of enemies) {
+        e.path = null; e.noPath = false;
+    }
+
+    clearSelection();
+    updateBuildButtons();
+}
+
+/* ──────────────── PATHFINDING (BFS) ──────────────── */
+function bfs(startQ, startR, goalQ, goalR) {
+    const startKey = hexKey(startQ, startR);
+    const goalKey = hexKey(goalQ, goalR);
+    if (startKey === goalKey) return [{ q: goalQ, r: goalR }];
+
+    const queue = [{ q: startQ, r: startR }];
+    const visited = new Map();
+    visited.set(startKey, null);
+
+    while (queue.length > 0) {
+        const cur = queue.shift();
+        const curKey = hexKey(cur.q, cur.r);
+
+        for (const d of HEX_DIRS) {
+            const nq = cur.q + d.q;
+            const nr = cur.r + d.r;
+            const nk = hexKey(nq, nr);
+
+            if (visited.has(nk)) continue;
+            if (!hexMeshes.has(nk)) continue; // outside grid
+
+            // Can walk through HQ tile (that's the goal) but not through other buildings
+            const cell = grid.get(nk);
+            if (cell && cell.type !== 'hq') continue;
+
+            visited.set(nk, curKey);
+
+            if (nk === goalKey) {
+                // Reconstruct path
+                const path = [];
+                let k = goalKey;
+                while (k !== null) {
+                    path.unshift(parseKey(k));
+                    k = visited.get(k);
+                }
+                return path;
+            }
+
+            queue.push({ q: nq, r: nr });
+        }
+    }
+    return null; // no path
+}
+
+/* ──────────────── ENEMIES ──────────────── */
+function getSpawnHexes() {
+    return ALL_HEXES.filter(h => h.r <= -5 && !grid.has(hexKey(h.q, h.r)));
+}
+
+function createEnemyMesh(type) {
+    switch (type) {
+        case 'grunt': return new THREE.Mesh(gruntGeo, gruntMat.clone());
+        case 'tank': return new THREE.Mesh(tankGeo, tankMat.clone());
+        case 'speed': {
+            const m = new THREE.Mesh(speedGeo, speedMat.clone());
+            return m;
+        }
+    }
+}
+
+function spawnEnemy(type) {
+    if (enemies.length >= MAX_ENEMIES) return;
+    const spawns = getSpawnHexes();
+    if (spawns.length === 0) return;
+    const sp = spawns[Math.floor(Math.random() * spawns.length)];
+
+    const stats = {
+        grunt: { hp: 3, speed: 1, reward: 5 },
+        tank: { hp: 8, speed: 0.5, reward: 15 },
+        speed: { hp: 1, speed: 2, reward: 8 },
+    }[type];
+
+    const mesh = createEnemyMesh(type);
+    const pos = hexToWorld(sp.q, sp.r);
+    mesh.position.set(pos.x, type === 'tank' ? 0.35 : 0.3, pos.z);
+    scene.add(mesh);
+
+    // Health bar group
+    const hpGroup = new THREE.Group();
+    const hpBg = new THREE.Mesh(new THREE.PlaneGeometry(0.6, 0.08), hpBarBgMat.clone());
+    const hpFg = new THREE.Mesh(new THREE.PlaneGeometry(0.6, 0.08), hpBarFgMat.clone());
+    hpFg.material = new THREE.MeshBasicMaterial({ color: 0xff4444, side: THREE.DoubleSide });
+    hpBg.position.y = 0;
+    hpFg.position.y = 0.001;
+    hpGroup.add(hpBg);
+    hpGroup.add(hpFg);
+    hpGroup.position.y = type === 'tank' ? 0.85 : 0.7;
+    hpGroup.lookAt(camera.position);
+    mesh.add(hpGroup);
+
+    enemies.push({
+        q: sp.q, r: sp.r, type,
+        hp: stats.hp, maxHp: stats.hp,
+        mesh, hpBar: hpFg,
+        path: null, pathIdx: 0,
+        moveTimer: 0,
+        speed: stats.speed,
+        reward: stats.reward,
+        attackTimer: 0,
+        hpGroup
+    });
+}
+
+function generateWave(wave) {
+    const defs = [];
+    // Base grunts
+    const grunts = Math.min(2 + wave * 2, 15);
+    for (let i = 0; i < grunts; i++) defs.push('grunt');
+    // Tanks from wave 3
+    if (wave >= 3) {
+        const tanks = Math.min(Math.floor((wave - 2) * 1.2), 6);
+        for (let i = 0; i < tanks; i++) defs.push('tank');
+    }
+    // Speed from wave 5
+    if (wave >= 5) {
+        const speeds = Math.min(Math.floor((wave - 4) * 1.5), 8);
+        for (let i = 0; i < speeds; i++) defs.push('speed');
+    }
+    return defs;
+}
+
+let waveQueue = [];
+let waveSpawnTimer = 0;
+
+function startWave() {
+    waveNum++;
+    waveQueue = generateWave(waveNum);
+    waveSpawnTimer = 0;
+    waveTimer = WAVE_INTERVAL;
+}
+
+/* ──────────────── PROJECTILES ──────────────── */
+function fireProjectile(fromWorld, toEnemy) {
+    if (projectiles.length >= MAX_PROJECTILES) return;
+    const mesh = new THREE.Mesh(projGeo, projMat.clone());
+    mesh.position.copy(fromWorld);
+    scene.add(mesh);
+    projectiles.push({
+        mesh,
+        from: fromWorld.clone(),
+        to: toEnemy, // reference to enemy
+        timer: 0,
+        duration: PROJECTILE_SPEED,
+        damage: TOWER_DAMAGE
+    });
+}
+
+/* ──────────────── SOLDIERS ──────────────── */
+function spawnSoldier(barracksKey) {
+    if (soldiers.length >= MAX_SOLDIERS) return;
+    const bk = parseKey(barracksKey);
+    const pos = hexToWorld(bk.q, bk.r);
+    const mesh = new THREE.Mesh(soldierGeo, soldierMat.clone());
+    mesh.position.set(pos.x, 0.2, pos.z);
+    scene.add(mesh);
+    const s = {
+        q: bk.q, r: bk.r,
+        mesh,
+        hp: 2,
+        barracksKey,
+        attackTimer: 0,
+        moveTimer: 0,
+        targetEnemy: null
+    };
+    soldiers.push(s);
+    const bt = barracksTimers.get(barracksKey);
+    if (bt) bt.soldier = s;
+}
+
+/* ──────────────── SELECTION / UI ──────────────── */
+function clearSelection() {
+    selectedHex = null;
+    buildMode = null;
+    selectionRing.visible = false;
+    elBuild.style.display = 'none';
+    elSell.style.display = 'none';
+    elInfo.style.display = 'none';
+    removeGhost();
+}
+
+function selectHex(q, r) {
+    selectedHex = { q, r };
+    const pos = hexToWorld(q, r);
+    selectionRing.position.set(pos.x, 0.12, pos.z);
+    selectionRing.visible = true;
+
+    const key = hexKey(q, r);
+    const cell = grid.get(key);
+
+    elBuild.style.display = 'none';
+    elSell.style.display = 'none';
+    elInfo.style.display = 'none';
+    buildMode = null;
+    removeGhost();
+
+    if (!cell) {
+        // Empty hex: show build menu
+        elBuild.style.display = 'flex';
+        updateBuildButtons();
+    } else if (cell.type === 'hq') {
+        elInfo.style.display = 'block';
+        elInfo.textContent = `HQ · HP: ${hqHP}/${HQ_MAX_HP}`;
+    } else {
+        // Building: show info + sell
+        elInfo.style.display = 'block';
+        elInfo.textContent = `${cell.type.toUpperCase()} · HP: ${cell.hp}/${cell.maxHp}`;
+        elSell.style.display = 'block';
+    }
+
+    // Check if enemy is on this hex
+    const enemy = enemies.find(e => e.q === q && e.r === r);
+    if (enemy) {
+        elInfo.style.display = 'block';
+        elInfo.textContent = `${enemy.type.toUpperCase()} · HP: ${enemy.hp}/${enemy.maxHp}`;
+        elBuild.style.display = 'none';
+        elSell.style.display = 'none';
+    }
+}
+
+function updateBuildButtons() {
+    document.querySelectorAll('.build-btn').forEach(btn => {
+        const type = btn.dataset.type;
+        const cost = COSTS[type];
+        if (energy < cost) {
+            btn.classList.add('disabled');
+        } else {
+            btn.classList.remove('disabled');
+        }
+    });
+}
+
+/* ──────────────── GHOST PREVIEW ──────────────── */
+function removeGhost() {
+    if (ghostMesh) {
+        scene.remove(ghostMesh);
+        ghostMesh = null;
+    }
+}
+
+function showGhost(q, r, type) {
+    removeGhost();
+    const key = hexKey(q, r);
+    const valid = !grid.has(key) && energy >= COSTS[type];
+
+    ghostMesh = createBuildingMesh(type);
+    ghostMesh.traverse(child => {
+        if (child.isMesh) {
+            child.material = valid ? ghostMatValid.clone() : ghostMatInvalid.clone();
+        }
+    });
+    const pos = hexToWorld(q, r);
+    ghostMesh.position.set(pos.x, 0, pos.z);
+    scene.add(ghostMesh);
+}
+
+/* ──────────────── RAYCASTING ──────────────── */
+const raycaster = new THREE.Raycaster();
+const mouse = new THREE.Vector2();
+const allHexMeshArr = [];
+
+function rebuildHexArray() {
+    allHexMeshArr.length = 0;
+    hexMeshes.forEach(m => allHexMeshArr.push(m));
+}
+
+function screenToHex(clientX, clientY) {
+    mouse.x = (clientX / window.innerWidth) * 2 - 1;
+    mouse.y = -(clientY / window.innerHeight) * 2 + 1;
+    raycaster.setFromCamera(mouse, camera);
+    const hits = raycaster.intersectObjects(allHexMeshArr);
+    if (hits.length > 0) {
+        const ud = hits[0].object.userData;
+        return { q: ud.q, r: ud.r };
+    }
+    return null;
+}
+
+/* ──────────────── INPUT HANDLERS ──────────────── */
+let pointerDown = false;
+let pointerMoved = false;
+let pointerStartX = 0, pointerStartY = 0;
+
+function handlePointerDown(x, y) {
+    pointerDown = true;
+    pointerMoved = false;
+    pointerStartX = x;
+    pointerStartY = y;
+}
+
+function handlePointerUp(x, y) {
+    if (!pointerDown) return;
+    pointerDown = false;
+
+    // Ignore if it was a drag (panning)
+    const dx = x - pointerStartX;
+    const dy = y - pointerStartY;
+    if (Math.sqrt(dx * dx + dy * dy) > 15) return;
+
+    if (gameState === 'START') {
+        gameState = 'PLAYING';
+        elStart.style.display = 'none';
+        startWave();
+        return;
+    }
+    if (gameState === 'GAME_OVER') {
+        resetGame();
+        return;
+    }
+
+    // If buildMode is active and we tap a hex, try to build
+    if (buildMode) {
+        const hex = screenToHex(x, y);
+        if (hex) {
+            const key = hexKey(hex.q, hex.r);
+            if (!grid.has(key)) {
+                if (placeBuilding(hex.q, hex.r, buildMode)) {
+                    clearSelection();
+                    return;
+                }
+            }
+        }
+        // Tap elsewhere cancels build mode
+        clearSelection();
+        return;
+    }
+
+    const hex = screenToHex(x, y);
+    if (hex) {
+        selectHex(hex.q, hex.r);
+    } else {
+        clearSelection();
+    }
+}
+
+function handlePointerMove(x, y) {
+    if (pointerDown) {
+        const dx = x - pointerStartX;
+        const dy = y - pointerStartY;
+        if (Math.sqrt(dx * dx + dy * dy) > 10) pointerMoved = true;
+    }
+
+    if (buildMode && gameState === 'PLAYING') {
+        const hex = screenToHex(x, y);
+        if (hex) {
+            showGhost(hex.q, hex.r, buildMode);
+        }
+    }
+}
+
+// Touch
+document.addEventListener('touchstart', e => {
+    e.preventDefault();
+    const t = e.touches[0];
+    handlePointerDown(t.clientX, t.clientY);
+}, { passive: false });
+document.addEventListener('touchend', e => {
+    e.preventDefault();
+    const t = e.changedTouches[0];
+    handlePointerUp(t.clientX, t.clientY);
+}, { passive: false });
+document.addEventListener('touchmove', e => {
+    e.preventDefault();
+    const t = e.touches[0];
+    handlePointerMove(t.clientX, t.clientY);
+}, { passive: false });
+
+// Mouse
+document.addEventListener('mousedown', e => {
+    handlePointerDown(e.clientX, e.clientY);
+});
+document.addEventListener('mouseup', e => {
+    handlePointerUp(e.clientX, e.clientY);
+});
+document.addEventListener('mousemove', e => {
+    handlePointerMove(e.clientX, e.clientY);
+});
+
+// Keyboard shortcuts
+document.addEventListener('keydown', e => {
+    if (gameState !== 'PLAYING') return;
+    const types = { '1': 'wall', '2': 'generator', '3': 'tower', '4': 'barracks' };
+    if (types[e.key] && selectedHex) {
+        const key = hexKey(selectedHex.q, selectedHex.r);
+        if (!grid.has(key)) {
+            placeBuilding(selectedHex.q, selectedHex.r, types[e.key]);
+            clearSelection();
+        }
+    }
+    if (e.key === 'Escape') {
+        clearSelection();
+    }
+});
+
+// Build buttons — enter build mode on tap, then next hex tap places
+document.querySelectorAll('.build-btn').forEach(btn => {
+    function activateBuild(e) {
+        e.stopPropagation();
+        e.preventDefault();
+        if (gameState !== 'PLAYING') return;
+        const type = btn.dataset.type;
+        if (energy < COSTS[type]) return;
+        buildMode = type;
+        elBuild.style.display = 'none';
+        // Show instruction
+        if (elInfo) {
+            elInfo.style.display = 'block';
+            elInfo.textContent = 'TAP HEX TO PLACE ' + type.toUpperCase();
+        }
+        // Highlight all valid hexes could be nice but keep it simple
+    }
+    btn.addEventListener('click', activateBuild);
+    btn.addEventListener('touchstart', e => { e.stopPropagation(); }, { passive: false });
+    btn.addEventListener('touchend', activateBuild, { passive: false });
+});
+
+// Sell button
+elSell.querySelector('button').addEventListener('click', e => {
+    e.stopPropagation();
+    if (selectedHex) sellBuilding(selectedHex.q, selectedHex.r);
+});
+elSell.querySelector('button').addEventListener('touchend', e => {
+    e.stopPropagation();
+    e.preventDefault();
+    if (selectedHex) sellBuilding(selectedHex.q, selectedHex.r);
+}, { passive: false });
+elSell.querySelector('button').addEventListener('touchstart', e => {
+    e.stopPropagation();
+}, { passive: false });
+
+/* ──────────────── DAMAGE / DEATH ──────────────── */
+function damageEnemy(enemy, dmg) {
+    enemy.hp -= dmg;
+    // Flash red
+    enemy.mesh.traverse(c => {
+        if (c.isMesh && c.material.emissive) {
+            c.material.emissive.set(0xffffff);
+            setTimeout(() => {
+                if (c.material) c.material.emissive.set(0x441111);
+            }, 80);
+        }
+    });
+    // Update HP bar
+    const ratio = Math.max(0, enemy.hp / enemy.maxHp);
+    enemy.hpBar.scale.x = ratio;
+    enemy.hpBar.position.x = (ratio - 1) * 0.3;
+
+    if (enemy.hp <= 0) {
+        killEnemy(enemy);
+    }
+}
+
+function killEnemy(enemy) {
+    energy += enemy.reward;
+    scene.remove(enemy.mesh);
+    const idx = enemies.indexOf(enemy);
+    if (idx >= 0) enemies.splice(idx, 1);
+    // Clear soldier targets
+    soldiers.forEach(s => { if (s.targetEnemy === enemy) s.targetEnemy = null; });
+    // Clear projectile targets
+    projectiles.forEach(p => { if (p.to === enemy) p.to = null; });
+}
+
+function damageBuilding(q, r, dmg) {
+    const key = hexKey(q, r);
+    const cell = grid.get(key);
+    if (!cell) return;
+
+    cell.hp -= dmg;
+    if (cell.hp <= 0) {
+        scene.remove(cell.mesh);
+        grid.delete(key);
+        if (cell.type === 'barracks') {
+            barracksTimers.delete(key);
+            const idx = soldiers.findIndex(s => s.barracksKey === key);
+            if (idx >= 0) {
+                scene.remove(soldiers[idx].mesh);
+                soldiers.splice(idx, 1);
+            }
+        }
+        // Recalc paths
+        for (const e of enemies) { e.path = null; e.noPath = false; }
+    }
+}
+
+function damageHQ(dmg) {
+    hqHP -= dmg;
+    if (hqHP <= 0) {
+        hqHP = 0;
+        gameState = 'GAME_OVER';
+        elFinalWave.textContent = `SURVIVED ${waveNum} WAVES`;
+        elGameOver.style.display = 'flex';
+    }
+}
+
+/* ──────────────── FIND NEAREST WALL TO ATTACK ──────────────── */
+function findNearestBlockingBuilding(eq, er) {
+    // Find nearest building that might be blocking path to HQ
+    let best = null;
+    let bestDist = 999;
+    grid.forEach((cell, key) => {
+        const p = parseKey(key);
+        const d = hexDist(eq, er, p.q, p.r);
+        if (d < bestDist && d > 0) {
+            bestDist = d;
+            best = { q: p.q, r: p.r, type: cell.type };
+        }
+    });
+    return best;
+}
+
+/* ──────────────── GAME UPDATE ──────────────── */
+function update(dt) {
+    if (gameState !== 'PLAYING') return;
+
+    // Energy regen
+    let genCount = 0;
+    grid.forEach(cell => { if (cell.type === 'generator') genCount++; });
+    energy += BASE_ENERGY_RATE * dt;
+    genTimer += dt;
+    if (genTimer >= 5) {
+        genTimer -= 5;
+        energy += genCount * GEN_ENERGY;
+    }
+    energy = Math.floor(energy * 100) / 100; // avoid float drift
+
+    // Wave timer
+    if (waveQueue.length === 0) {
+        waveTimer -= dt;
+        if (waveTimer <= 0) {
+            startWave();
+        }
+    }
+
+    // Spawn queued enemies
+    if (waveQueue.length > 0) {
+        waveSpawnTimer += dt;
+        if (waveSpawnTimer >= 0.5) { // stagger spawns by 0.5 sec
+            waveSpawnTimer -= 0.5;
+            const type = waveQueue.shift();
+            spawnEnemy(type);
+        }
+    }
+
+    // Update enemies
+    for (let i = enemies.length - 1; i >= 0; i--) {
+        const e = enemies[i];
+
+        // Get path if needed
+        if (!e.path && !e.noPath) {
+            e.path = bfs(e.q, e.r, HQ_POS.q, HQ_POS.r);
+            e.pathIdx = 0;
+            if (!e.path) e.noPath = true;
+        }
+
+        if (e.path && e.path.length <= 1) {
+            // Already at or adjacent to HQ
+            damageHQ(1);
+            scene.remove(e.mesh);
+            enemies.splice(i, 1);
+            continue;
+        } else if (e.path && e.path.length > 1) {
+            e.moveTimer += dt * e.speed;
+            if (e.moveTimer >= 1) {
+                e.moveTimer -= 1;
+                e.pathIdx++;
+                if (e.pathIdx >= e.path.length) {
+                    // Reached HQ
+                    damageHQ(1);
+                    scene.remove(e.mesh);
+                    enemies.splice(i, 1);
+                    continue;
+                }
+                const next = e.path[e.pathIdx];
+                e.q = next.q;
+                e.r = next.r;
+            }
+            // Interpolate position
+            const cur = e.path[Math.min(e.pathIdx, e.path.length - 1)];
+            const next = e.path[Math.min(e.pathIdx + 1, e.path.length - 1)];
+            const curW = hexToWorld(cur.q, cur.r);
+            const nextW = hexToWorld(next.q, next.r);
+            const t = e.moveTimer;
+            e.mesh.position.x = curW.x + (nextW.x - curW.x) * t;
+            e.mesh.position.z = curW.z + (nextW.z - curW.z) * t;
+        } else if (!e.path) {
+            // No path: attack nearest wall/building or HQ
+            e.attackTimer += dt;
+            if (e.attackTimer >= 1) {
+                e.attackTimer -= 1;
+                // Adjacent building?
+                const neighbors = hexNeighbors(e.q, e.r);
+                let attacked = false;
+                for (const n of neighbors) {
+                    const key = hexKey(n.q, n.r);
+                    const cell = grid.get(key);
+                    if (cell && cell.type !== 'hq') {
+                        damageBuilding(n.q, n.r, 1);
+                        attacked = true;
+                        break;
+                    }
+                }
+                if (!attacked) {
+                    // Move toward nearest blocking structure
+                    const target = findNearestBlockingBuilding(e.q, e.r);
+                    if (target) {
+                        // Move one step closer
+                        let bestN = null, bestD = 999;
+                        for (const n of neighbors) {
+                            if (!hexMeshes.has(hexKey(n.q, n.r))) continue;
+                            if (grid.has(hexKey(n.q, n.r))) continue;
+                            const d = hexDist(n.q, n.r, target.q, target.r);
+                            if (d < bestD) { bestD = d; bestN = n; }
+                        }
+                        if (bestN) {
+                            e.q = bestN.q;
+                            e.r = bestN.r;
+                            const pos = hexToWorld(e.q, e.r);
+                            e.mesh.position.x = pos.x;
+                            e.mesh.position.z = pos.z;
+                            e.path = null; e.noPath = false; // retry
+                        } else {
+                            // Attack adjacent HQ if next to it
+                            for (const n of neighbors) {
+                                if (n.q === HQ_POS.q && n.r === HQ_POS.r) {
+                                    damageHQ(1);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Health bar facing camera (billboard)
+        if (e.hpGroup) {
+            e.hpGroup.quaternion.copy(camera.quaternion);
+        }
+    }
+
+    // Tower shooting
+    grid.forEach((cell, key) => {
+        if (cell.type !== 'tower') return;
+        cell.fireTimer += dt;
+        if (cell.fireTimer >= TOWER_FIRE_RATE) {
+            const p = parseKey(key);
+            // Find nearest enemy in range
+            let nearest = null, nearDist = Infinity;
+            for (const e of enemies) {
+                const d = hexDist(p.q, p.r, e.q, e.r);
+                if (d <= TOWER_RANGE && d < nearDist) {
+                    nearDist = d;
+                    nearest = e;
+                }
+            }
+            if (nearest) {
+                cell.fireTimer = 0;
+                const wpos = hexToWorld(p.q, p.r);
+                fireProjectile(
+                    new THREE.Vector3(wpos.x, 0.65, wpos.z),
+                    nearest
+                );
+                // Flash tower
+                cell.mesh.traverse(c => {
+                    if (c.isMesh && c.material.emissive) {
+                        c.material.emissive.set(0x00ffff);
+                        setTimeout(() => { if (c.material) c.material.emissive.set(0x004466); }, 100);
+                    }
+                });
+            }
+        }
+    });
+
+    // Update projectiles
+    for (let i = projectiles.length - 1; i >= 0; i--) {
+        const p = projectiles[i];
+        p.timer += dt;
+        const t = Math.min(p.timer / p.duration, 1);
+
+        if (p.to && p.to.mesh) {
+            // Track target
+            p.mesh.position.lerpVectors(p.from, p.to.mesh.position, t);
+            p.mesh.position.y = p.from.y + (p.to.mesh.position.y - p.from.y) * t + Math.sin(t * Math.PI) * 0.3;
+        } else {
+            // Target gone, just fly to last known position and die
+            p.timer = p.duration + 1;
+        }
+
+        if (p.timer >= p.duration) {
+            if (p.to && p.to.hp > 0) {
+                damageEnemy(p.to, p.damage);
+            }
+            scene.remove(p.mesh);
+            projectiles.splice(i, 1);
+        }
+    }
+
+    // Barracks & soldiers
+    barracksTimers.forEach((bt, key) => {
+        if (!grid.has(key)) return;
+        if (!bt.soldier || !soldiers.includes(bt.soldier)) {
+            bt.soldier = null;
+            bt.timer -= dt;
+            if (bt.timer <= 0) {
+                bt.timer = BARRACKS_SPAWN_TIME;
+                spawnSoldier(key);
+            }
+        }
+    });
+
+    // Soldier AI
+    for (let i = soldiers.length - 1; i >= 0; i--) {
+        const s = soldiers[i];
+        // Check barracks still exists
+        if (!grid.has(s.barracksKey)) {
+            scene.remove(s.mesh);
+            soldiers.splice(i, 1);
+            continue;
+        }
+
+        // Find nearest enemy
+        let nearest = null, nearDist = Infinity;
+        for (const e of enemies) {
+            const d = hexDist(s.q, s.r, e.q, e.r);
+            if (d < nearDist) { nearDist = d; nearest = e; }
+        }
+
+        if (nearest && nearDist <= 1) {
+            // Attack
+            s.attackTimer += dt;
+            if (s.attackTimer >= 1) {
+                s.attackTimer -= 1;
+                damageEnemy(nearest, 1);
+            }
+        } else if (nearest && nearDist <= 5) {
+            // Move toward enemy
+            s.moveTimer += dt;
+            if (s.moveTimer >= 0.6) {
+                s.moveTimer -= 0.6;
+                const neighbors = hexNeighbors(s.q, s.r);
+                let bestN = null, bestD = Infinity;
+                for (const n of neighbors) {
+                    if (!hexMeshes.has(hexKey(n.q, n.r))) continue;
+                    if (grid.has(hexKey(n.q, n.r))) continue;
+                    const d = hexDist(n.q, n.r, nearest.q, nearest.r);
+                    if (d < bestD) { bestD = d; bestN = n; }
+                }
+                if (bestN) {
+                    s.q = bestN.q;
+                    s.r = bestN.r;
+                }
+            }
+        } else {
+            // Return near barracks
+            const bk = parseKey(s.barracksKey);
+            if (hexDist(s.q, s.r, bk.q, bk.r) > 2) {
+                s.moveTimer += dt;
+                if (s.moveTimer >= 0.8) {
+                    s.moveTimer -= 0.8;
+                    const neighbors = hexNeighbors(s.q, s.r);
+                    let bestN = null, bestD = Infinity;
+                    for (const n of neighbors) {
+                        if (!hexMeshes.has(hexKey(n.q, n.r))) continue;
+                        if (grid.has(hexKey(n.q, n.r))) continue;
+                        const d = hexDist(n.q, n.r, bk.q, bk.r);
+                        if (d < bestD) { bestD = d; bestN = n; }
+                    }
+                    if (bestN) {
+                        s.q = bestN.q;
+                        s.r = bestN.r;
+                    }
+                }
+            }
+        }
+
+        // Smooth position
+        const targetPos = hexToWorld(s.q, s.r);
+        s.mesh.position.x += (targetPos.x - s.mesh.position.x) * 0.15;
+        s.mesh.position.z += (targetPos.z - s.mesh.position.z) * 0.15;
+
+        // Soldiers can be killed by enemies
+        for (const e of enemies) {
+            if (hexDist(s.q, s.r, e.q, e.r) <= 1) {
+                // Enemy fights back (slower)
+                s.hp -= 0.3 * dt;
+                if (s.hp <= 0) {
+                    scene.remove(s.mesh);
+                    const bt = barracksTimers.get(s.barracksKey);
+                    if (bt) { bt.soldier = null; bt.timer = BARRACKS_SPAWN_TIME; }
+                    soldiers.splice(i, 1);
+                    break;
+                }
+            }
+        }
+    }
+
+    // Generator glow pulse
+    const pulse = 0.4 + Math.sin(performance.now() * 0.003) * 0.3;
+    grid.forEach(cell => {
+        if (cell.type === 'generator' && cell.mesh.userData.glowRing) {
+            cell.mesh.userData.glowRing.material.opacity = pulse;
+        }
+    });
+
+    // HQ beacon pulse
+    if (hqMeshGroup) {
+        const bPulse = 1.5 + Math.sin(performance.now() * 0.002) * 0.5;
+        hqMeshGroup.children.forEach(c => {
+            if (c.isPointLight) c.intensity = bPulse;
+        });
+    }
+
+    updateHUD();
+}
+
+/* ──────────────── HUD ──────────────── */
+function updateHUD() {
+    elEnergy.textContent = `⚡ ${Math.floor(energy)}`;
+
+    const nextTime = waveQueue.length > 0 ? 'ACTIVE' : `NEXT: ${Math.ceil(waveTimer)}s`;
+    elWave.textContent = `WAVE ${waveNum} · ${nextTime}\nENEMIES: ${enemies.length}`;
+
+    const hpPct = hqHP / HQ_MAX_HP;
+    const bars = Math.round(hpPct * 20);
+    const hpStr = '█'.repeat(bars) + '░'.repeat(20 - bars);
+    elHQ.textContent = `HQ: ${hpStr} ${hqHP}/${HQ_MAX_HP}`;
+    elHQ.style.color = hqHP > 10 ? '#00ff88' : (hqHP > 5 ? '#ffcc00' : '#ff4444');
+
+    updateBuildButtons();
+}
+
+/* ──────────────── RESET ──────────────── */
+function resetGame() {
+    // Remove all buildings
+    grid.forEach((cell, key) => {
+        if (cell.mesh) scene.remove(cell.mesh);
+    });
+    grid.clear();
+
+    // Remove enemies
+    for (const e of enemies) scene.remove(e.mesh);
+    enemies.length = 0;
+
+    // Remove projectiles
+    for (const p of projectiles) scene.remove(p.mesh);
+    projectiles.length = 0;
+
+    // Remove soldiers
+    for (const s of soldiers) scene.remove(s.mesh);
+    soldiers.length = 0;
+
+    barracksTimers.clear();
+    waveQueue.length = 0;
+
+    energy = 100;
+    waveNum = 0;
+    waveTimer = WAVE_INTERVAL;
+    hqHP = HQ_MAX_HP;
+    genTimer = 0;
+
+    clearSelection();
+
+    // Rebuild HQ
+    buildHQ();
+
+    // Hide overlays
+    elGameOver.style.display = 'none';
+    elStart.style.display = 'none';
+
+    gameState = 'PLAYING';
+    startWave();
+}
+
+/* ──────────────── RENDER LOOP ──────────────── */
+let lastTime = 0;
+let frameCount = 0;
+let fpsTimer = 0;
+
+function animate(time) {
+    requestAnimationFrame(animate);
+
+    const dt = Math.min((time - lastTime) / 1000, 0.1);
+    lastTime = time;
+
+    // FPS counter
+    frameCount++;
+    fpsTimer += dt;
+    if (fpsTimer >= 1) {
+        elFPS.textContent = `${Math.round(frameCount / fpsTimer)} FPS`;
+        frameCount = 0;
+        fpsTimer = 0;
+    }
+
+    update(dt);
+    renderer.render(scene, camera);
+}
+
+/* ──────────────── INIT ──────────────── */
+buildGrid();
+rebuildHexArray();
+buildHQ();
+
+// Resize
+window.addEventListener('resize', () => {
+    const w = window.innerWidth, h = window.innerHeight;
+    const a = w / h;
+    camera.left = -frustum * a;
+    camera.right = frustum * a;
+    camera.top = frustum;
+    camera.bottom = -frustum;
+    camera.updateProjectionMatrix();
+    renderer.setSize(w, h);
+});
+
+requestAnimationFrame(animate);
+
+</script>
+</body>
+</html>

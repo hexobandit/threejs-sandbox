@@ -1,0 +1,1254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>22 / HEX PLAGUE — MUTATIONS</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #050808; }
+  canvas { display: block; width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+// ── Setup ──────────────────────────────────────────────────────────
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+let W, H, dpr;
+
+function resize() {
+  dpr = window.devicePixelRatio || 1;
+  W = window.innerWidth;
+  H = window.innerHeight;
+  canvas.width = W * dpr;
+  canvas.height = H * dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+window.addEventListener('resize', resize);
+resize();
+
+// ── Colors ─────────────────────────────────────────────────────────
+const COL = {
+  bg: '#050808',
+  transmission: '#00ff44',
+  symptoms: '#ff8800',
+  resistance: '#4488ff',
+  text: '#c0d0c8',
+  textDim: '#405048',
+  panel: '#0a1210',
+  panelBorder: '#1a3028',
+  dna: '#00ff44',
+};
+
+// ── Mutation Data ──────────────────────────────────────────────────
+// States: 'unlocked', 'available', 'locked'
+const HEX_R = 34; // hex radius
+const mutations = [];
+let selectedMutation = null;
+
+// Helper: hex grid col/row to pixel position (offset coordinates, pointy-top)
+// We use a custom layout: positions are manually placed for the tree structure
+function addMutation(id, name, category, cost, desc, col, row, prereqs, state, icon) {
+  mutations.push({ id, name, category, cost, desc, col, row, prereqs, state, icon,
+    flash: 0, particles: [] });
+}
+
+// Layout: center of screen is roughly (0,0) in grid space
+// We'll convert grid to screen coords later
+// Category roots are at row 0, branches go upward (negative rows = up on screen)
+
+// ── TRANSMISSION (green, left) ─────────────────────────────
+addMutation('air', 'Airborne', 'transmission', 8, 'Pathogen spreads through air particles.', -6, 0, [], 'unlocked', 'wind');
+addMutation('aero', 'Aerosol', 'transmission', 12, 'Fine mist transmission. +20% infectivity.', -7.5, -1.5, ['air'], 'unlocked', 'spray');
+addMutation('wind', 'Windborne', 'transmission', 18, 'Carried by jet streams across continents.', -9, -3, ['aero'], 'available', 'jet');
+
+addMutation('water', 'Waterborne', 'transmission', 8, 'Spreads via contaminated water.', -4.5, 1.5, [], 'unlocked', 'drop');
+addMutation('sewage', 'Sewage', 'transmission', 11, 'Thrives in sewage systems. +15% urban spread.', -6, 3, ['water'], 'available', 'pipe');
+addMutation('ocean', 'Ocean Drift', 'transmission', 20, 'Survives in saltwater. Crosses oceans.', -7.5, 4.5, ['sewage'], 'locked', 'wave');
+
+addMutation('insect', 'Insect Vector', 'transmission', 10, 'Transmitted by mosquitoes and flies.', -3, -1.5, ['air'], 'available', 'bug');
+addMutation('bird', 'Bird Migration', 'transmission', 16, 'Carried by migratory birds globally.', -4.5, -3, ['insect'], 'locked', 'feather');
+
+addMutation('blood', 'Blood Contact', 'transmission', 9, 'Spreads through blood contact.', -3, 3, ['water'], 'locked', 'blood');
+addMutation('medical', 'Medical Spread', 'transmission', 15, 'Infects through medical equipment.', -4.5, 4.5, ['blood'], 'locked', 'cross');
+
+// ── SYMPTOMS (orange, center) ──────────────────────────────
+addMutation('cough', 'Coughing', 'symptoms', 6, 'Persistent cough. Increases spread.', 0, -1, [], 'unlocked', 'lungs');
+addMutation('pneum', 'Pneumonia', 'symptoms', 12, 'Severe lung infection. +40% lethality.', -1.5, -2.5, ['cough'], 'available', 'skull');
+addMutation('organ', 'Organ Failure', 'symptoms', 24, 'Multiple organs shut down. Lethal.', -3, -4, ['pneum'], 'locked', 'heart');
+
+addMutation('fever', 'Fever', 'symptoms', 5, 'High temperature. Weakens host.', 1.5, -2.5, [], 'unlocked', 'flame');
+addMutation('delir', 'Delirium', 'symptoms', 14, 'Mental confusion. Reduces cure effort.', 3, -4, ['fever'], 'locked', 'spiral');
+addMutation('coma', 'Coma', 'symptoms', 22, 'Host falls unconscious. Extremely severe.', 4.5, -5.5, ['delir'], 'locked', 'moon');
+
+addMutation('nause', 'Nausea', 'symptoms', 5, 'Stomach upset. Mild but spreadable.', 0, 1.5, [], 'unlocked', 'stomach');
+addMutation('vomit', 'Vomiting', 'symptoms', 10, 'Violent purging. +25% infectivity.', -1.5, 3, ['nause'], 'locked', 'splash');
+addMutation('bleed', 'Internal Bleeding', 'symptoms', 20, 'Hemorrhaging. Extremely lethal.', -3, 4.5, ['vomit'], 'locked', 'drip');
+
+addMutation('rash', 'Rash', 'symptoms', 4, 'Skin irritation. Visible symptom.', 1.5, 3, [], 'locked', 'dots');
+addMutation('necro', 'Necrosis', 'symptoms', 18, 'Tissue death. Horrifying and lethal.', 3, 4.5, ['rash'], 'locked', 'decay');
+
+// ── RESISTANCE (blue, right) ───────────────────────────────
+addMutation('cold', 'Cold Resist', 'resistance', 7, 'Survives in cold climates.', 5, 0, [], 'locked', 'snow');
+addMutation('arctic', 'Arctic Survival', 'resistance', 15, 'Thrives in sub-zero temperatures.', 6.5, -1.5, ['cold'], 'locked', 'ice');
+
+addMutation('heat', 'Heat Resist', 'resistance', 7, 'Survives in hot climates.', 6.5, 1.5, [], 'locked', 'sun');
+addMutation('desert', 'Desert Adapt', 'resistance', 15, 'Thrives in arid desert conditions.', 8, 3, ['heat'], 'locked', 'cactus');
+
+addMutation('drug1', 'Drug Resist I', 'resistance', 10, 'Resists basic medications.', 5, 3, [], 'locked', 'pill');
+addMutation('drug2', 'Drug Resist II', 'resistance', 18, 'Resists advanced treatments.', 6.5, 4.5, ['drug1'], 'locked', 'pills');
+addMutation('shield', 'Genetic Shield', 'resistance', 28, 'Near-immune to all known cures.', 8, 6, ['drug2'], 'locked', 'dna');
+
+addMutation('stealth', 'Stealth', 'resistance', 9, 'Harder for scientists to detect.', 3.5, 1.5, [], 'locked', 'eye');
+addMutation('camo', 'Camouflage', 'resistance', 16, 'Mimics host cells. Invisible to tests.', 5, 3, ['stealth'], 'locked', 'mask');
+
+// Set initial selection
+selectedMutation = mutations.find(m => m.id === 'pneum');
+
+// ── Grid → Screen Conversion ──────────────────────────────────────
+function gridToScreen(col, row) {
+  const cx = W * 0.5;
+  const cy = H * 0.48;
+  const spacing = HEX_R * 2.2;
+  return {
+    x: cx + col * spacing * 0.87,
+    y: cy + row * spacing * 0.75
+  };
+}
+
+// ── Category color ─────────────────────────────────────────────────
+function catColor(cat) {
+  if (cat === 'transmission') return COL.transmission;
+  if (cat === 'symptoms') return COL.symptoms;
+  if (cat === 'resistance') return COL.resistance;
+  return '#888';
+}
+
+// ── Draw Hex ───────────────────────────────────────────────────────
+function hexPath(cx, cy, r) {
+  ctx.beginPath();
+  for (let i = 0; i < 6; i++) {
+    const angle = Math.PI / 6 + (Math.PI / 3) * i;
+    const px = cx + r * Math.cos(angle);
+    const py = cy + r * Math.sin(angle);
+    if (i === 0) ctx.moveTo(px, py);
+    else ctx.lineTo(px, py);
+  }
+  ctx.closePath();
+}
+
+// ── Draw Icon ──────────────────────────────────────────────────────
+function drawIcon(cx, cy, icon, color, alpha) {
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.strokeStyle = color;
+  ctx.fillStyle = color;
+  ctx.lineWidth = 1.5;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  const s = 8; // icon scale
+
+  switch(icon) {
+    case 'wind':
+      // Three wavy lines
+      for (let j = -1; j <= 1; j++) {
+        ctx.beginPath();
+        for (let i = -s; i <= s; i += 1) {
+          const px = cx + i;
+          const py = cy + j * 5 + Math.sin(i * 0.4) * 2;
+          if (i === -s) ctx.moveTo(px, py);
+          else ctx.lineTo(px, py);
+        }
+        ctx.stroke();
+      }
+      break;
+    case 'spray':
+      // Radiating lines from center
+      for (let i = 0; i < 8; i++) {
+        const a = (Math.PI * 2 / 8) * i;
+        ctx.beginPath();
+        ctx.moveTo(cx + Math.cos(a) * 3, cy + Math.sin(a) * 3);
+        ctx.lineTo(cx + Math.cos(a) * s, cy + Math.sin(a) * s);
+        ctx.stroke();
+      }
+      break;
+    case 'jet':
+      // Arrow pointing right with trails
+      ctx.beginPath();
+      ctx.moveTo(cx - s, cy);
+      ctx.lineTo(cx + s, cy);
+      ctx.moveTo(cx + s * 0.4, cy - s * 0.5);
+      ctx.lineTo(cx + s, cy);
+      ctx.lineTo(cx + s * 0.4, cy + s * 0.5);
+      ctx.stroke();
+      break;
+    case 'drop':
+      // Water drop
+      ctx.beginPath();
+      ctx.moveTo(cx, cy - s);
+      ctx.bezierCurveTo(cx + s * 0.8, cy, cx + s * 0.5, cy + s, cx, cy + s);
+      ctx.bezierCurveTo(cx - s * 0.5, cy + s, cx - s * 0.8, cy, cx, cy - s);
+      ctx.fill();
+      break;
+    case 'pipe':
+      // Pipe shape
+      ctx.beginPath();
+      ctx.moveTo(cx - s, cy - 3);
+      ctx.lineTo(cx + 3, cy - 3);
+      ctx.lineTo(cx + 3, cy + s);
+      ctx.moveTo(cx - s, cy + 3);
+      ctx.lineTo(cx - 3, cy + 3);
+      ctx.lineTo(cx - 3, cy + s);
+      ctx.stroke();
+      break;
+    case 'wave':
+      // Wave pattern
+      ctx.beginPath();
+      for (let i = -s; i <= s; i += 1) {
+        const px = cx + i;
+        const py = cy + Math.sin(i * 0.6) * 4;
+        if (i === -s) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      }
+      ctx.stroke();
+      break;
+    case 'bug':
+      // Simple insect
+      ctx.beginPath();
+      ctx.arc(cx, cy - 2, 3, 0, Math.PI * 2);
+      ctx.arc(cx, cy + 4, 4, 0, Math.PI * 2);
+      ctx.fill();
+      // legs
+      for (let i = -1; i <= 1; i++) {
+        ctx.beginPath();
+        ctx.moveTo(cx - 6, cy + 2 + i * 3);
+        ctx.lineTo(cx + 6, cy + 2 + i * 3);
+        ctx.stroke();
+      }
+      break;
+    case 'feather':
+      // Feather shape
+      ctx.beginPath();
+      ctx.moveTo(cx, cy - s);
+      ctx.quadraticCurveTo(cx + s, cy, cx, cy + s);
+      ctx.quadraticCurveTo(cx - s * 0.3, cy, cx, cy - s);
+      ctx.fill();
+      // center line
+      ctx.beginPath();
+      ctx.moveTo(cx, cy - s);
+      ctx.lineTo(cx, cy + s);
+      ctx.strokeStyle = '#050808';
+      ctx.stroke();
+      break;
+    case 'blood':
+      // Blood drops
+      for (let dx of [-4, 0, 4]) {
+        ctx.beginPath();
+        ctx.moveTo(cx + dx, cy - 4);
+        ctx.bezierCurveTo(cx + dx + 3, cy, cx + dx + 2, cy + 4, cx + dx, cy + 5);
+        ctx.bezierCurveTo(cx + dx - 2, cy + 4, cx + dx - 3, cy, cx + dx, cy - 4);
+        ctx.fill();
+      }
+      break;
+    case 'cross':
+      // Medical cross
+      ctx.fillRect(cx - 2, cy - s, 4, s * 2);
+      ctx.fillRect(cx - s, cy - 2, s * 2, 4);
+      break;
+    case 'lungs':
+      // Simple lungs shape
+      ctx.beginPath();
+      ctx.moveTo(cx, cy - s);
+      ctx.lineTo(cx, cy + 4);
+      ctx.moveTo(cx, cy - 2);
+      ctx.bezierCurveTo(cx - s * 1.2, cy - 4, cx - s * 1.2, cy + s, cx, cy + 4);
+      ctx.moveTo(cx, cy - 2);
+      ctx.bezierCurveTo(cx + s * 1.2, cy - 4, cx + s * 1.2, cy + s, cx, cy + 4);
+      ctx.stroke();
+      break;
+    case 'skull':
+      // Skull shape
+      ctx.beginPath();
+      ctx.arc(cx, cy - 1, s * 0.75, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillRect(cx - 3, cy + s * 0.5, 6, 4);
+      // eyes
+      ctx.fillStyle = '#050808';
+      ctx.beginPath();
+      ctx.arc(cx - 3, cy - 2, 2, 0, Math.PI * 2);
+      ctx.arc(cx + 3, cy - 2, 2, 0, Math.PI * 2);
+      ctx.fill();
+      break;
+    case 'heart':
+      // Heart (organ)
+      ctx.beginPath();
+      ctx.moveTo(cx, cy + s * 0.7);
+      ctx.bezierCurveTo(cx - s * 1.2, cy - s * 0.2, cx - s * 0.6, cy - s, cx, cy - s * 0.4);
+      ctx.bezierCurveTo(cx + s * 0.6, cy - s, cx + s * 1.2, cy - s * 0.2, cx, cy + s * 0.7);
+      ctx.fill();
+      break;
+    case 'flame':
+      // Flame
+      ctx.beginPath();
+      ctx.moveTo(cx, cy - s);
+      ctx.quadraticCurveTo(cx + s * 0.8, cy - s * 0.3, cx + s * 0.5, cy + s * 0.5);
+      ctx.quadraticCurveTo(cx + s * 0.2, cy + s, cx, cy + s);
+      ctx.quadraticCurveTo(cx - s * 0.2, cy + s, cx - s * 0.5, cy + s * 0.5);
+      ctx.quadraticCurveTo(cx - s * 0.8, cy - s * 0.3, cx, cy - s);
+      ctx.fill();
+      break;
+    case 'spiral':
+      // Spiral
+      ctx.beginPath();
+      for (let i = 0; i < 20; i++) {
+        const a = i * 0.5;
+        const r2 = i * 0.5;
+        const px = cx + Math.cos(a) * r2;
+        const py = cy + Math.sin(a) * r2;
+        if (i === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      }
+      ctx.stroke();
+      break;
+    case 'moon':
+      // Crescent moon
+      ctx.beginPath();
+      ctx.arc(cx, cy, s * 0.8, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#050808';
+      ctx.beginPath();
+      ctx.arc(cx + 3, cy - 1, s * 0.65, 0, Math.PI * 2);
+      ctx.fill();
+      break;
+    case 'stomach':
+      // Stomach-like oval
+      ctx.beginPath();
+      ctx.ellipse(cx, cy, s * 0.6, s * 0.9, 0, 0, Math.PI * 2);
+      ctx.fill();
+      break;
+    case 'splash':
+      // Splash drops
+      for (let i = 0; i < 6; i++) {
+        const a = (Math.PI * 2 / 6) * i + 0.3;
+        const r2 = s * 0.7;
+        ctx.beginPath();
+        ctx.arc(cx + Math.cos(a) * r2, cy + Math.sin(a) * r2, 2, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      break;
+    case 'drip':
+      // Dripping
+      ctx.beginPath();
+      ctx.moveTo(cx - 4, cy - s);
+      ctx.lineTo(cx + 4, cy - s);
+      ctx.stroke();
+      for (let dx of [-3, 1, 4]) {
+        ctx.beginPath();
+        ctx.moveTo(cx + dx, cy - s);
+        ctx.lineTo(cx + dx, cy + s * (0.4 + Math.abs(dx) * 0.1));
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(cx + dx, cy + s * (0.5 + Math.abs(dx) * 0.1), 1.5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      break;
+    case 'dots':
+      // Scatter dots (rash)
+      const rng = [[-4,-4],[2,-6],[5,-1],[-3,2],[1,3],[-6,0],[4,5],[-1,-2],[6,3],[-5,5]];
+      for (const [dx, dy] of rng) {
+        ctx.beginPath();
+        ctx.arc(cx + dx, cy + dy, 1.2, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      break;
+    case 'decay':
+      // Jagged shape
+      ctx.beginPath();
+      for (let i = 0; i < 8; i++) {
+        const a = (Math.PI * 2 / 8) * i;
+        const r2 = (i % 2 === 0) ? s : s * 0.5;
+        const px = cx + Math.cos(a) * r2;
+        const py = cy + Math.sin(a) * r2;
+        if (i === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      }
+      ctx.closePath();
+      ctx.fill();
+      break;
+    case 'snow':
+      // Snowflake
+      for (let i = 0; i < 6; i++) {
+        const a = (Math.PI / 3) * i;
+        ctx.beginPath();
+        ctx.moveTo(cx, cy);
+        ctx.lineTo(cx + Math.cos(a) * s, cy + Math.sin(a) * s);
+        ctx.stroke();
+        // branches
+        const bx = cx + Math.cos(a) * s * 0.6;
+        const by = cy + Math.sin(a) * s * 0.6;
+        ctx.beginPath();
+        ctx.moveTo(bx, by);
+        ctx.lineTo(bx + Math.cos(a + 0.7) * 3, by + Math.sin(a + 0.7) * 3);
+        ctx.moveTo(bx, by);
+        ctx.lineTo(bx + Math.cos(a - 0.7) * 3, by + Math.sin(a - 0.7) * 3);
+        ctx.stroke();
+      }
+      break;
+    case 'ice':
+      // Crystal
+      ctx.beginPath();
+      ctx.moveTo(cx, cy - s);
+      ctx.lineTo(cx + s * 0.6, cy);
+      ctx.lineTo(cx, cy + s);
+      ctx.lineTo(cx - s * 0.6, cy);
+      ctx.closePath();
+      ctx.fill();
+      break;
+    case 'sun':
+      // Sun
+      ctx.beginPath();
+      ctx.arc(cx, cy, s * 0.5, 0, Math.PI * 2);
+      ctx.fill();
+      for (let i = 0; i < 8; i++) {
+        const a = (Math.PI * 2 / 8) * i;
+        ctx.beginPath();
+        ctx.moveTo(cx + Math.cos(a) * s * 0.65, cy + Math.sin(a) * s * 0.65);
+        ctx.lineTo(cx + Math.cos(a) * s, cy + Math.sin(a) * s);
+        ctx.stroke();
+      }
+      break;
+    case 'cactus':
+      // Cactus-like
+      ctx.fillRect(cx - 2, cy - s, 4, s * 2);
+      ctx.fillRect(cx - s * 0.7, cy - 3, s * 0.5, 3);
+      ctx.fillRect(cx - s * 0.7, cy - 3, 3, -4);
+      ctx.fillRect(cx + s * 0.2, cy + 1, s * 0.5, 3);
+      ctx.fillRect(cx + s * 0.7 - 3, cy + 1, 3, -4);
+      break;
+    case 'pill':
+      // Pill capsule
+      ctx.beginPath();
+      ctx.moveTo(cx - s * 0.3, cy - s * 0.7);
+      ctx.lineTo(cx + s * 0.3, cy + s * 0.7);
+      ctx.lineWidth = 5;
+      ctx.lineCap = 'round';
+      ctx.stroke();
+      ctx.lineWidth = 1.5;
+      break;
+    case 'pills':
+      // Two pills
+      ctx.lineWidth = 4;
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(cx - 4, cy - s * 0.6);
+      ctx.lineTo(cx - 1, cy + s * 0.6);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(cx + 4, cy - s * 0.4);
+      ctx.lineTo(cx + 2, cy + s * 0.7);
+      ctx.stroke();
+      ctx.lineWidth = 1.5;
+      break;
+    case 'dna':
+      // DNA helix small
+      ctx.beginPath();
+      for (let i = -s; i <= s; i += 0.5) {
+        const px = cx + Math.sin(i * 0.8) * 5;
+        const py = cy + i;
+        if (i === -s) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      }
+      ctx.stroke();
+      ctx.beginPath();
+      for (let i = -s; i <= s; i += 0.5) {
+        const px = cx - Math.sin(i * 0.8) * 5;
+        const py = cy + i;
+        if (i === -s) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      }
+      ctx.stroke();
+      break;
+    case 'eye':
+      // Eye
+      ctx.beginPath();
+      ctx.moveTo(cx - s, cy);
+      ctx.quadraticCurveTo(cx, cy - s * 0.7, cx + s, cy);
+      ctx.quadraticCurveTo(cx, cy + s * 0.7, cx - s, cy);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(cx, cy, 3, 0, Math.PI * 2);
+      ctx.fill();
+      break;
+    case 'mask':
+      // Mask shape
+      ctx.beginPath();
+      ctx.ellipse(cx, cy, s * 0.8, s * 0.9, 0, 0, Math.PI * 2);
+      ctx.stroke();
+      // eye holes
+      ctx.beginPath();
+      ctx.ellipse(cx - 3, cy - 2, 2.5, 1.5, 0, 0, Math.PI * 2);
+      ctx.ellipse(cx + 3, cy - 2, 2.5, 1.5, 0, 0, Math.PI * 2);
+      ctx.fill();
+      break;
+    default:
+      ctx.beginPath();
+      ctx.arc(cx, cy, 4, 0, Math.PI * 2);
+      ctx.fill();
+  }
+  ctx.restore();
+}
+
+// ── Background Particles ───────────────────────────────────────────
+const bgParticles = [];
+for (let i = 0; i < 80; i++) {
+  bgParticles.push({
+    x: Math.random() * 2000,
+    y: Math.random() * 1200,
+    vx: (Math.random() - 0.5) * 0.3,
+    vy: (Math.random() - 0.5) * 0.2,
+    r: Math.random() * 1.5 + 0.3,
+    alpha: Math.random() * 0.3 + 0.05,
+    color: ['#00ff44', '#ff8800', '#4488ff', '#22aa66'][Math.floor(Math.random() * 4)]
+  });
+}
+
+// ── Evolution Animation State ──────────────────────────────────────
+let evolveAnim = { active: false, x: 0, y: 0, t: 0, color: '#fff', particles: [] };
+
+// Start one evolve animation on "Aerosol" after a short delay
+setTimeout(() => {
+  const m = mutations.find(m2 => m2.id === 'aero');
+  if (m) {
+    const pos = gridToScreen(m.col, m.row);
+    evolveAnim = {
+      active: true, x: pos.x, y: pos.y, t: 0,
+      color: catColor(m.category),
+      particles: []
+    };
+    for (let i = 0; i < 20; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const spd = Math.random() * 2 + 1;
+      evolveAnim.particles.push({
+        x: pos.x, y: pos.y,
+        vx: Math.cos(a) * spd, vy: Math.sin(a) * spd,
+        life: 1.0
+      });
+    }
+  }
+}, 1500);
+
+// ── DNA Points ─────────────────────────────────────────────────────
+const dnaPoints = 47;
+
+// ── Mouse interaction ──────────────────────────────────────────────
+let mouse = { x: -1000, y: -1000 };
+canvas.addEventListener('mousemove', (e) => {
+  mouse.x = e.clientX;
+  mouse.y = e.clientY;
+});
+canvas.addEventListener('click', (e) => {
+  const mx = e.clientX;
+  const my = e.clientY;
+  for (const m of mutations) {
+    const pos = gridToScreen(m.col, m.row);
+    const dx = mx - pos.x;
+    const dy = my - pos.y;
+    if (dx * dx + dy * dy < HEX_R * HEX_R) {
+      selectedMutation = m;
+      break;
+    }
+  }
+});
+
+// ── Main Draw Loop ─────────────────────────────────────────────────
+let time = 0;
+function draw() {
+  time += 0.016;
+  ctx.clearRect(0, 0, W, H);
+
+  // ── Background fill ──
+  ctx.fillStyle = COL.bg;
+  ctx.fillRect(0, 0, W, H);
+
+  // ── Vignette corners ──
+  drawVignette();
+
+  // ── DNA Helix background ──
+  drawDNAHelices(time);
+
+  // ── Biohazard watermark ──
+  drawBiohazard();
+
+  // ── Background particles ──
+  drawBgParticles(time);
+
+  // ── Connection lines ──
+  drawConnections(time);
+
+  // ── Mutation hexes ──
+  drawMutations(time);
+
+  // ── Evolution animation ──
+  drawEvolveAnim(time);
+
+  // ── UI Overlay ──
+  drawUI(time);
+
+  requestAnimationFrame(draw);
+}
+
+// ── DNA Double Helix Background ────────────────────────────────────
+function drawDNAHelices(t) {
+  ctx.save();
+  ctx.globalAlpha = 0.04;
+
+  // Multiple helix strands across the background
+  for (let h = 0; h < 3; h++) {
+    const baseX = W * (0.15 + h * 0.35);
+    const phase = h * 2.0;
+
+    ctx.strokeStyle = h === 0 ? '#00ff44' : h === 1 ? '#ff8800' : '#4488ff';
+    ctx.lineWidth = 1.5;
+
+    // Strand 1
+    ctx.beginPath();
+    for (let y = -20; y < H + 20; y += 3) {
+      const wave = Math.sin((y * 0.008) + t * 0.3 + phase) * 40;
+      const px = baseX + wave;
+      if (y === -20) ctx.moveTo(px, y);
+      else ctx.lineTo(px, y);
+    }
+    ctx.stroke();
+
+    // Strand 2
+    ctx.beginPath();
+    for (let y = -20; y < H + 20; y += 3) {
+      const wave = Math.sin((y * 0.008) + t * 0.3 + phase + Math.PI) * 40;
+      const px = baseX + wave;
+      if (y === -20) ctx.moveTo(px, y);
+      else ctx.lineTo(px, y);
+    }
+    ctx.stroke();
+
+    // Rungs connecting the strands
+    ctx.globalAlpha = 0.025;
+    for (let y = 0; y < H; y += 20) {
+      const w1 = Math.sin((y * 0.008) + t * 0.3 + phase) * 40;
+      const w2 = Math.sin((y * 0.008) + t * 0.3 + phase + Math.PI) * 40;
+      ctx.beginPath();
+      ctx.moveTo(baseX + w1, y);
+      ctx.lineTo(baseX + w2, y);
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 0.04;
+  }
+  ctx.restore();
+}
+
+// ── Biohazard Symbol Watermark ─────────────────────────────────────
+function drawBiohazard() {
+  ctx.save();
+  const cx = W * 0.5;
+  const cy = H * 0.48;
+  ctx.globalAlpha = 0.025;
+  ctx.strokeStyle = '#88aa88';
+  ctx.lineWidth = 2;
+
+  const r1 = 60, r2 = 100, r3 = 30;
+
+  for (let i = 0; i < 3; i++) {
+    const angle = (Math.PI * 2 / 3) * i - Math.PI / 2;
+    const ox = cx + Math.cos(angle) * r3;
+    const oy = cy + Math.sin(angle) * r3;
+
+    ctx.beginPath();
+    ctx.arc(ox, oy, r1, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+
+  // Outer ring
+  ctx.beginPath();
+  ctx.arc(cx, cy, r2, 0, Math.PI * 2);
+  ctx.stroke();
+
+  // Inner ring
+  ctx.beginPath();
+  ctx.arc(cx, cy, r3 * 0.5, 0, Math.PI * 2);
+  ctx.stroke();
+
+  ctx.restore();
+}
+
+// ── Corner Vignette ────────────────────────────────────────────────
+function drawVignette() {
+  ctx.save();
+
+  // Radial gradient from transparent center to dark edges
+  const grd = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.3, W / 2, H / 2, Math.max(W, H) * 0.75);
+  grd.addColorStop(0, 'rgba(5,8,8,0)');
+  grd.addColorStop(1, 'rgba(5,8,8,0.8)');
+  ctx.fillStyle = grd;
+  ctx.fillRect(0, 0, W, H);
+
+  // Microscope circles in corners
+  ctx.globalAlpha = 0.06;
+  ctx.strokeStyle = '#446655';
+  ctx.lineWidth = 1;
+  const cornerR = 80;
+  const corners = [[0, 0], [W, 0], [0, H], [W, H]];
+  for (const [cx, cy] of corners) {
+    ctx.beginPath();
+    ctx.arc(cx, cy, cornerR, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(cx, cy, cornerR * 0.7, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(cx, cy, cornerR * 0.4, 0, Math.PI * 2);
+    ctx.stroke();
+    // Crosshair
+    ctx.beginPath();
+    ctx.moveTo(cx - cornerR, cy);
+    ctx.lineTo(cx + cornerR, cy);
+    ctx.moveTo(cx, cy - cornerR);
+    ctx.lineTo(cx, cy + cornerR);
+    ctx.stroke();
+  }
+
+  ctx.restore();
+}
+
+// ── Background Particles ───────────────────────────────────────────
+function drawBgParticles(t) {
+  ctx.save();
+  for (const p of bgParticles) {
+    p.x += p.vx;
+    p.y += p.vy;
+    if (p.x < 0) p.x = W;
+    if (p.x > W) p.x = 0;
+    if (p.y < 0) p.y = H;
+    if (p.y > H) p.y = 0;
+
+    ctx.globalAlpha = p.alpha * (0.5 + 0.5 * Math.sin(t * 0.5 + p.x * 0.01));
+    ctx.fillStyle = p.color;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+// ── Connection Lines ───────────────────────────────────────────────
+function drawConnections(t) {
+  ctx.save();
+
+  for (const m of mutations) {
+    if (!m.prereqs || m.prereqs.length === 0) continue;
+    const posM = gridToScreen(m.col, m.row);
+
+    for (const preId of m.prereqs) {
+      const pre = mutations.find(p => p.id === preId);
+      if (!pre) continue;
+      const posPre = gridToScreen(pre.col, pre.row);
+
+      const bothUnlocked = m.state === 'unlocked' && pre.state === 'unlocked';
+      const oneAvailable = (m.state === 'available' && pre.state === 'unlocked') ||
+                           (m.state === 'unlocked' && pre.state === 'available');
+
+      ctx.lineWidth = bothUnlocked ? 2.5 : 1.5;
+
+      if (bothUnlocked) {
+        // Bright glowing animated connection
+        const color = catColor(m.category);
+        ctx.strokeStyle = color;
+        ctx.globalAlpha = 0.7;
+        ctx.setLineDash([]);
+
+        // Glow
+        ctx.shadowColor = color;
+        ctx.shadowBlur = 10;
+        ctx.beginPath();
+        ctx.moveTo(posPre.x, posPre.y);
+        ctx.lineTo(posM.x, posM.y);
+        ctx.stroke();
+
+        // Animated flowing dash on top
+        ctx.shadowBlur = 0;
+        ctx.globalAlpha = 0.9;
+        ctx.setLineDash([6, 8]);
+        ctx.lineDashOffset = -t * 30;
+        ctx.beginPath();
+        ctx.moveTo(posPre.x, posPre.y);
+        ctx.lineTo(posM.x, posM.y);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+      } else if (oneAvailable) {
+        // Dimmer but visible
+        const color = catColor(m.category);
+        ctx.strokeStyle = color;
+        ctx.globalAlpha = 0.25;
+        ctx.shadowBlur = 0;
+        ctx.setLineDash([4, 6]);
+        ctx.lineDashOffset = -t * 15;
+        ctx.beginPath();
+        ctx.moveTo(posPre.x, posPre.y);
+        ctx.lineTo(posM.x, posM.y);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+      } else {
+        // Very dim
+        ctx.strokeStyle = '#1a2a20';
+        ctx.globalAlpha = 0.3;
+        ctx.shadowBlur = 0;
+        ctx.setLineDash([2, 6]);
+        ctx.beginPath();
+        ctx.moveTo(posPre.x, posPre.y);
+        ctx.lineTo(posM.x, posM.y);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+    }
+  }
+
+  ctx.shadowBlur = 0;
+  ctx.restore();
+}
+
+// ── Draw All Mutations ─────────────────────────────────────────────
+function drawMutations(t) {
+  for (const m of mutations) {
+    const pos = gridToScreen(m.col, m.row);
+    const color = catColor(m.category);
+    const isSelected = selectedMutation && selectedMutation.id === m.id;
+
+    // Hover detection
+    const dx = mouse.x - pos.x;
+    const dy = mouse.y - pos.y;
+    const isHover = (dx * dx + dy * dy) < HEX_R * HEX_R;
+
+    ctx.save();
+
+    if (m.state === 'unlocked') {
+      // ── Glow halo ──
+      ctx.globalAlpha = 0.15 + 0.05 * Math.sin(t * 2);
+      ctx.shadowColor = color;
+      ctx.shadowBlur = 25;
+      hexPath(pos.x, pos.y, HEX_R + 4);
+      ctx.fillStyle = color;
+      ctx.fill();
+      ctx.shadowBlur = 0;
+
+      // ── Fill ──
+      ctx.globalAlpha = 1;
+      hexPath(pos.x, pos.y, HEX_R);
+      const grd = ctx.createRadialGradient(pos.x, pos.y - 5, 0, pos.x, pos.y, HEX_R);
+      grd.addColorStop(0, colorWithAlpha(color, 0.4));
+      grd.addColorStop(1, colorWithAlpha(color, 0.15));
+      ctx.fillStyle = grd;
+      ctx.fill();
+
+      // ── Border ──
+      ctx.strokeStyle = color;
+      ctx.lineWidth = isSelected ? 2.5 : 1.5;
+      ctx.globalAlpha = isSelected ? 1 : 0.8;
+      hexPath(pos.x, pos.y, HEX_R);
+      ctx.stroke();
+
+      // ── Icon ──
+      drawIcon(pos.x, pos.y - 2, m.icon, color, 0.9);
+
+    } else if (m.state === 'available') {
+      // ── Pulsing border ──
+      const pulse = 0.4 + 0.3 * Math.sin(t * 3);
+
+      // Dim fill
+      ctx.globalAlpha = 0.6;
+      hexPath(pos.x, pos.y, HEX_R);
+      const grd = ctx.createRadialGradient(pos.x, pos.y - 5, 0, pos.x, pos.y, HEX_R);
+      grd.addColorStop(0, colorWithAlpha(color, 0.15));
+      grd.addColorStop(1, colorWithAlpha(color, 0.05));
+      ctx.fillStyle = grd;
+      ctx.fill();
+
+      // Pulsing border
+      ctx.globalAlpha = pulse;
+      ctx.strokeStyle = color;
+      ctx.lineWidth = isSelected ? 2.5 : 2;
+      ctx.setLineDash([4, 4]);
+      ctx.lineDashOffset = -t * 20;
+      hexPath(pos.x, pos.y, HEX_R);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      // Subtle outer glow pulse
+      ctx.globalAlpha = pulse * 0.1;
+      ctx.shadowColor = color;
+      ctx.shadowBlur = 15;
+      hexPath(pos.x, pos.y, HEX_R + 2);
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+
+      // Icon (dimmer)
+      drawIcon(pos.x, pos.y - 2, m.icon, color, 0.4);
+
+    } else {
+      // ── Locked ──
+      ctx.globalAlpha = 0.15;
+      hexPath(pos.x, pos.y, HEX_R);
+      ctx.fillStyle = '#0a1510';
+      ctx.fill();
+
+      ctx.strokeStyle = '#1a2a20';
+      ctx.lineWidth = 1;
+      ctx.setLineDash([2, 4]);
+      hexPath(pos.x, pos.y, HEX_R);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      // Icon (very dim)
+      drawIcon(pos.x, pos.y - 2, m.icon, '#2a3a30', 0.3);
+    }
+
+    // ── Hover highlight ──
+    if (isHover) {
+      ctx.globalAlpha = 0.15;
+      hexPath(pos.x, pos.y, HEX_R);
+      ctx.fillStyle = '#ffffff';
+      ctx.fill();
+    }
+
+    // ── Selection ring ──
+    if (isSelected) {
+      ctx.globalAlpha = 0.5 + 0.2 * Math.sin(t * 4);
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([]);
+      hexPath(pos.x, pos.y, HEX_R + 5);
+      ctx.stroke();
+    }
+
+    ctx.restore();
+
+    // ── Name text below hex ──
+    ctx.save();
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    ctx.font = '9px "Courier New", monospace';
+
+    if (m.state === 'unlocked') {
+      ctx.fillStyle = color;
+      ctx.globalAlpha = 0.85;
+    } else if (m.state === 'available') {
+      ctx.fillStyle = color;
+      ctx.globalAlpha = 0.5;
+    } else {
+      ctx.fillStyle = '#2a3a30';
+      ctx.globalAlpha = 0.35;
+    }
+    ctx.fillText(m.name.toUpperCase(), pos.x, pos.y + HEX_R + 4);
+
+    // Cost
+    ctx.font = '8px "Courier New", monospace';
+    if (m.state === 'unlocked') {
+      ctx.fillStyle = '#667766';
+      ctx.globalAlpha = 0.5;
+      ctx.fillText('EVOLVED', pos.x, pos.y + HEX_R + 15);
+    } else {
+      ctx.fillStyle = m.state === 'available' ? '#aacc88' : '#334433';
+      ctx.globalAlpha = m.state === 'available' ? 0.6 : 0.3;
+      ctx.fillText(m.cost + ' DNA', pos.x, pos.y + HEX_R + 15);
+    }
+
+    ctx.restore();
+  }
+}
+
+// ── Evolve Animation ───────────────────────────────────────────────
+function drawEvolveAnim(t) {
+  if (!evolveAnim.active) return;
+
+  evolveAnim.t += 0.016;
+  const et = evolveAnim.t;
+
+  if (et > 2.0) {
+    evolveAnim.active = false;
+    return;
+  }
+
+  ctx.save();
+
+  // Expanding ring
+  if (et < 1.0) {
+    const ringR = et * 80;
+    const ringAlpha = 1.0 - et;
+    ctx.globalAlpha = ringAlpha * 0.6;
+    ctx.strokeStyle = evolveAnim.color;
+    ctx.lineWidth = 3 * (1 - et);
+    ctx.shadowColor = evolveAnim.color;
+    ctx.shadowBlur = 20;
+    ctx.beginPath();
+    ctx.arc(evolveAnim.x, evolveAnim.y, ringR, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+  }
+
+  // Bright flash
+  if (et < 0.3) {
+    const flashAlpha = (0.3 - et) / 0.3;
+    ctx.globalAlpha = flashAlpha * 0.5;
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.arc(evolveAnim.x, evolveAnim.y, HEX_R * 2 * flashAlpha, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Particles
+  for (const p of evolveAnim.particles) {
+    p.x += p.vx;
+    p.y += p.vy;
+    p.vy += 0.02; // slight gravity
+    p.life -= 0.01;
+    if (p.life <= 0) continue;
+    ctx.globalAlpha = p.life * 0.8;
+    ctx.fillStyle = evolveAnim.color;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, 2 * p.life, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  ctx.restore();
+}
+
+// ── UI Overlay ─────────────────────────────────────────────────────
+function drawUI(t) {
+  ctx.save();
+
+  // ── Top-left: Title ──
+  ctx.font = 'bold 14px "Courier New", monospace';
+  ctx.fillStyle = '#506858';
+  ctx.globalAlpha = 0.7;
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+  ctx.fillText('22 / HEX PLAGUE', 20, 18);
+  ctx.font = 'bold 11px "Courier New", monospace';
+  ctx.fillStyle = '#88aa88';
+  ctx.globalAlpha = 0.5;
+  ctx.fillText('MUTATIONS', 20, 36);
+
+  // ── Top-center: DNA Points ──
+  ctx.textAlign = 'center';
+  ctx.font = 'bold 16px "Courier New", monospace';
+  ctx.fillStyle = COL.dna;
+  ctx.globalAlpha = 0.8 + 0.1 * Math.sin(t * 2);
+  ctx.shadowColor = COL.dna;
+  ctx.shadowBlur = 10;
+  ctx.fillText('DNA POINTS: ' + dnaPoints, W / 2, 20);
+  ctx.shadowBlur = 0;
+
+  // Small DNA icon
+  ctx.font = '10px "Courier New", monospace';
+  ctx.globalAlpha = 0.5;
+  ctx.fillStyle = COL.dna;
+  ctx.fillText('\u2622  PATHOGEN EVOLUTION TREE  \u2622', W / 2, 42);
+
+  // ── Top-right: Back ──
+  ctx.textAlign = 'right';
+  ctx.font = '12px "Courier New", monospace';
+  ctx.fillStyle = '#667766';
+  ctx.globalAlpha = 0.6;
+  ctx.fillText('[ BACK TO MAP ]', W - 20, 22);
+
+  // ── Category Legend (top area) ──
+  const legendY = 62;
+  const cats = [
+    { name: 'TRANSMISSION', color: COL.transmission },
+    { name: 'SYMPTOMS', color: COL.symptoms },
+    { name: 'RESISTANCE', color: COL.resistance }
+  ];
+  ctx.textAlign = 'center';
+  ctx.font = '10px "Courier New", monospace';
+  for (let i = 0; i < cats.length; i++) {
+    const lx = W / 2 + (i - 1) * 160;
+    ctx.globalAlpha = 0.6;
+    ctx.fillStyle = cats[i].color;
+    ctx.beginPath();
+    ctx.arc(lx - 40, legendY + 4, 4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillText(cats[i].name, lx + 10, legendY);
+  }
+
+  // ── Bottom: Selected mutation info panel ──
+  if (selectedMutation) {
+    drawInfoPanel(selectedMutation, t);
+  }
+
+  // ── Stats bar ──
+  ctx.globalAlpha = 0.35;
+  ctx.fillStyle = '#1a2a1e';
+  ctx.fillRect(0, H - 30, W, 30);
+  ctx.fillStyle = '#506858';
+  ctx.globalAlpha = 0.5;
+  ctx.font = '9px "Courier New", monospace';
+  ctx.textAlign = 'left';
+  ctx.fillText('INFECTIVITY: 34%   SEVERITY: 22%   LETHALITY: 15%   CURE PROGRESS: 4%', 20, H - 14);
+  ctx.textAlign = 'right';
+  ctx.fillText('DAY 47  |  INFECTED: 1.2B  |  DEAD: 89M', W - 20, H - 14);
+
+  ctx.restore();
+}
+
+// ── Info Panel ─────────────────────────────────────────────────────
+function drawInfoPanel(m, t) {
+  const panelW = Math.min(460, W - 40);
+  const panelH = 90;
+  const panelX = (W - panelW) / 2;
+  const panelY = H - 130;
+  const color = catColor(m.category);
+
+  ctx.save();
+
+  // Panel background
+  ctx.globalAlpha = 0.85;
+  ctx.fillStyle = '#060e0a';
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1;
+
+  // Rounded rect
+  const cr = 4;
+  ctx.beginPath();
+  ctx.moveTo(panelX + cr, panelY);
+  ctx.lineTo(panelX + panelW - cr, panelY);
+  ctx.quadraticCurveTo(panelX + panelW, panelY, panelX + panelW, panelY + cr);
+  ctx.lineTo(panelX + panelW, panelY + panelH - cr);
+  ctx.quadraticCurveTo(panelX + panelW, panelY + panelH, panelX + panelW - cr, panelY + panelH);
+  ctx.lineTo(panelX + cr, panelY + panelH);
+  ctx.quadraticCurveTo(panelX, panelY + panelH, panelX, panelY + panelH - cr);
+  ctx.lineTo(panelX, panelY + cr);
+  ctx.quadraticCurveTo(panelX, panelY, panelX + cr, panelY);
+  ctx.closePath();
+  ctx.fill();
+
+  // Border glow
+  ctx.globalAlpha = 0.5;
+  ctx.shadowColor = color;
+  ctx.shadowBlur = 8;
+  ctx.stroke();
+  ctx.shadowBlur = 0;
+
+  // Title bar line
+  ctx.globalAlpha = 0.3;
+  ctx.beginPath();
+  ctx.moveTo(panelX + 10, panelY + 26);
+  ctx.lineTo(panelX + panelW - 10, panelY + 26);
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 0.5;
+  ctx.stroke();
+
+  // Title
+  ctx.globalAlpha = 1;
+  ctx.font = 'bold 13px "Courier New", monospace';
+  ctx.fillStyle = color;
+  ctx.textAlign = 'left';
+  ctx.fillText(m.name.toUpperCase(), panelX + 14, panelY + 18);
+
+  // Category tag
+  ctx.font = '9px "Courier New", monospace';
+  ctx.globalAlpha = 0.5;
+  ctx.fillText('[' + m.category.toUpperCase() + ']', panelX + 14 + ctx.measureText(m.name.toUpperCase()).width + 10, panelY + 18);
+
+  // Description
+  ctx.font = '11px "Courier New", monospace';
+  ctx.fillStyle = '#99aa99';
+  ctx.globalAlpha = 0.8;
+  ctx.fillText(m.desc, panelX + 14, panelY + 44);
+
+  // Prerequisites
+  if (m.prereqs && m.prereqs.length > 0) {
+    const preNames = m.prereqs.map(pid => {
+      const p = mutations.find(mut => mut.id === pid);
+      return p ? p.name : pid;
+    }).join(', ');
+    ctx.font = '10px "Courier New", monospace';
+    ctx.fillStyle = '#667766';
+    ctx.globalAlpha = 0.6;
+    ctx.fillText('Requires: ' + preNames, panelX + 14, panelY + 62);
+  } else {
+    ctx.font = '10px "Courier New", monospace';
+    ctx.fillStyle = '#667766';
+    ctx.globalAlpha = 0.6;
+    ctx.fillText('Requires: None (Root mutation)', panelX + 14, panelY + 62);
+  }
+
+  // Cost / Evolve button
+  ctx.textAlign = 'right';
+  if (m.state === 'unlocked') {
+    ctx.font = 'bold 11px "Courier New", monospace';
+    ctx.fillStyle = '#446644';
+    ctx.globalAlpha = 0.6;
+    ctx.fillText('EVOLVED', panelX + panelW - 14, panelY + 44);
+  } else {
+    // Cost
+    ctx.font = '10px "Courier New", monospace';
+    ctx.fillStyle = '#aacc88';
+    ctx.globalAlpha = 0.7;
+    ctx.fillText('Cost: ' + m.cost + ' DNA', panelX + panelW - 14, panelY + 44);
+
+    // Evolve button
+    if (m.state === 'available') {
+      const btnW = 80, btnH = 22;
+      const btnX = panelX + panelW - 14 - btnW;
+      const btnY = panelY + 56;
+
+      ctx.globalAlpha = 0.7 + 0.2 * Math.sin(t * 4);
+      ctx.fillStyle = colorWithAlpha(color, 0.2);
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(btnX + 3, btnY);
+      ctx.lineTo(btnX + btnW - 3, btnY);
+      ctx.quadraticCurveTo(btnX + btnW, btnY, btnX + btnW, btnY + 3);
+      ctx.lineTo(btnX + btnW, btnY + btnH - 3);
+      ctx.quadraticCurveTo(btnX + btnW, btnY + btnH, btnX + btnW - 3, btnY + btnH);
+      ctx.lineTo(btnX + 3, btnY + btnH);
+      ctx.quadraticCurveTo(btnX, btnY + btnH, btnX, btnY + btnH - 3);
+      ctx.lineTo(btnX, btnY + 3);
+      ctx.quadraticCurveTo(btnX, btnY, btnX + 3, btnY);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+
+      ctx.globalAlpha = 1;
+      ctx.font = 'bold 11px "Courier New", monospace';
+      ctx.fillStyle = color;
+      ctx.textAlign = 'center';
+      ctx.fillText('[ EVOLVE ]', btnX + btnW / 2, btnY + 15);
+    } else {
+      ctx.font = '10px "Courier New", monospace';
+      ctx.fillStyle = '#443333';
+      ctx.globalAlpha = 0.5;
+      ctx.fillText('LOCKED', panelX + panelW - 14, panelY + 68);
+    }
+  }
+
+  ctx.restore();
+}
+
+// ── Utility: color with alpha ──────────────────────────────────────
+function colorWithAlpha(hex, alpha) {
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+
+// ── Start ──────────────────────────────────────────────────────────
+draw();
+</script>
+</body>
+</html>

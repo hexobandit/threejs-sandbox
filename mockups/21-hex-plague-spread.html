@@ -1,0 +1,895 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>21 / HEX PLAGUE — SPREAD</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #080808; overflow: hidden; font-family: 'Courier New', monospace; cursor: grab; }
+body.dragging { cursor: grabbing; }
+canvas { display: block; }
+#back-link {
+    position: fixed; top: 12px; right: 16px; z-index: 100;
+    color: #666; font-size: 11px; text-decoration: none; font-family: 'Courier New', monospace;
+}
+#back-link:hover { color: #aaa; }
+</style>
+</head>
+<body>
+<a id="back-link" href="./index.html">[ BACK ]</a>
+<canvas id="c"></canvas>
+<script>
+// ============================================================
+// 21 / HEX PLAGUE — SPREAD
+// Canvas 2D hex-grid contagion simulation
+// ============================================================
+
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+
+// DPI scaling
+let dpr = window.devicePixelRatio || 1;
+let W, H;
+
+function resize() {
+    dpr = window.devicePixelRatio || 1;
+    W = window.innerWidth;
+    H = window.innerHeight;
+    canvas.width = W * dpr;
+    canvas.height = H * dpr;
+    canvas.style.width = W + 'px';
+    canvas.style.height = H + 'px';
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+resize();
+window.addEventListener('resize', resize);
+
+// ============================================================
+// HEX GRID SETUP
+// ============================================================
+const S = 24; // hex size
+const GRID_RADIUS = 12;
+
+function hexToPixel(q, r) {
+    return {
+        x: S * 1.5 * q,
+        y: S * Math.sqrt(3) * (r + q / 2)
+    };
+}
+
+function drawHex(cx, cy, size, fill, stroke, lineWidth) {
+    ctx.beginPath();
+    for (let i = 0; i < 6; i++) {
+        const angle = Math.PI / 180 * (60 * i);
+        const px = cx + size * Math.cos(angle);
+        const py = cy + size * Math.sin(angle);
+        if (i === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+    }
+    ctx.closePath();
+    if (fill) { ctx.fillStyle = fill; ctx.fill(); }
+    if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = lineWidth || 1; ctx.stroke(); }
+}
+
+// Build hex map
+const hexes = {};
+let hexList = [];
+
+function hexKey(q, r) { return q + ',' + r; }
+
+for (let q = -GRID_RADIUS; q <= GRID_RADIUS; q++) {
+    const r1 = Math.max(-GRID_RADIUS, -q - GRID_RADIUS);
+    const r2 = Math.min(GRID_RADIUS, -q + GRID_RADIUS);
+    for (let r = r1; r <= r2; r++) {
+        const pop = 100 + Math.floor(Math.random() * 900);
+        const hex = {
+            q, r,
+            population: pop,
+            infected: 0,
+            dead: 0,
+            infectionRate: 0.3 + Math.random() * 0.7,
+            isCity: false,
+            cityName: '',
+            pulseTime: 0,
+            wasInfected: false
+        };
+        hexes[hexKey(q, r)] = hex;
+        hexList.push(hex);
+    }
+}
+
+// ============================================================
+// CITIES
+// ============================================================
+const cities = [
+    { q: 0, r: 0, name: 'ALPHA' },
+    { q: -6, r: 1, name: 'NEXUS' },
+    { q: 5, r: -3, name: 'PORT VALE' },
+    { q: -3, r: 7, name: 'IRON GATE' },
+    { q: 7, r: -1, name: 'HAVEN' },
+    { q: -8, r: 4, name: 'BASTION' },
+    { q: 3, r: -8, name: 'ZENITH' },
+    { q: -2, r: -6, name: 'OUTPOST 9' }
+];
+
+cities.forEach(c => {
+    const h = hexes[hexKey(c.q, c.r)];
+    if (h) {
+        h.isCity = true;
+        h.cityName = c.name;
+        h.population = 500 + Math.floor(Math.random() * 500);
+        h.infectionRate *= 1.8;
+    }
+});
+
+// ============================================================
+// INITIAL INFECTION
+// ============================================================
+const patient0 = hexes[hexKey(2, -3)];
+if (patient0) {
+    patient0.infected = Math.floor(patient0.population * 0.7);
+    patient0.wasInfected = true;
+}
+
+// ============================================================
+// TRANSPORT ROUTES
+// ============================================================
+const routes = [
+    { from: { q: -5, r: -2 }, to: { q: 4, r: 3 }, type: 'air' },
+    { from: { q: -3, r: 5 }, to: { q: 6, r: -4 }, type: 'sea' },
+    { from: { q: -8, r: 4 }, to: { q: 7, r: -1 }, type: 'air' },
+    { from: { q: 0, r: 0 }, to: { q: -6, r: 1 }, type: 'air' },
+    { from: { q: 5, r: -3 }, to: { q: -2, r: -6 }, type: 'sea' },
+    { from: { q: 3, r: -8 }, to: { q: -3, r: 7 }, type: 'air' },
+    { from: { q: -8, r: 4 }, to: { q: 3, r: -8 }, type: 'sea' },
+    { from: { q: 7, r: -1 }, to: { q: -5, r: -2 }, type: 'air' },
+    { from: { q: -6, r: 1 }, to: { q: 6, r: -4 }, type: 'sea' },
+    { from: { q: 0, r: 0 }, to: { q: 5, r: -3 }, type: 'air' }
+];
+
+// Traveling infection dots along routes
+const travelers = [];
+
+function spawnTraveler(route) {
+    const fromPos = hexToPixel(route.from.q, route.from.r);
+    const toPos = hexToPixel(route.to.q, route.to.r);
+    travelers.push({
+        x: fromPos.x,
+        y: fromPos.y,
+        targetX: toPos.x,
+        targetY: toPos.y,
+        progress: 0,
+        speed: 0.008 + Math.random() * 0.006,
+        route: route,
+        infected: true
+    });
+}
+
+// ============================================================
+// PARTICLES
+// ============================================================
+const particles = [];
+const MAX_PARTICLES = 30;
+
+function spawnParticle(fromHex, toHex) {
+    if (particles.length >= MAX_PARTICLES) return;
+    const fp = hexToPixel(fromHex.q, fromHex.r);
+    const tp = hexToPixel(toHex.q, toHex.r);
+    particles.push({
+        x: fp.x + (Math.random() - 0.5) * 8,
+        y: fp.y + (Math.random() - 0.5) * 8,
+        tx: tp.x + (Math.random() - 0.5) * 8,
+        ty: tp.y + (Math.random() - 0.5) * 8,
+        progress: 0,
+        speed: 0.01 + Math.random() * 0.02,
+        alpha: 0.6 + Math.random() * 0.4,
+        size: 1 + Math.random() * 2
+    });
+}
+
+// ============================================================
+// NEWS TICKER
+// ============================================================
+const newsMessages = [
+    "REGION ALPHA REPORTS FIRST CASES",
+    "AIRPORTS CLOSING IN SECTOR 7",
+    "CURE RESEARCH BEGINS — 0% COMPLETE",
+    "SECTOR 12 POPULATION DECLINING",
+    "GOVERNMENTS DECLARE STATE OF EMERGENCY",
+    "WATER SUPPLIES CONTAMINATED IN NEXUS",
+    "MARTIAL LAW DECLARED IN PORT VALE",
+    "QUARANTINE ZONES ESTABLISHED",
+    "HOSPITALS OVERWHELMED IN HAVEN",
+    "MASS EVACUATION FROM IRON GATE",
+    "SUPPLY CHAINS DISRUPTED WORLDWIDE",
+    "EMERGENCY BROADCAST: STAY INDOORS",
+    "BASTION REPORTS ZERO NEW CASES... EVERYONE IS DEAD",
+    "OUTPOST 9 HAS GONE DARK",
+    "ZENITH AIRSPACE CLOSED INDEFINITELY"
+];
+
+let currentNewsIdx = 0;
+let newsScrollX = 0;
+let lastNewsChange = 0;
+
+// ============================================================
+// GAME STATE
+// ============================================================
+let day = 1;
+let cureProgress = 0;
+let tickTimer = 0;
+const TICK_INTERVAL = 500; // ms
+let gameTime = 0;
+let lastTime = 0;
+
+// Camera
+let camX = 0, camY = 0;
+let camTargetX = 0, camTargetY = 0;
+let zoom = 1;
+let targetZoom = 1;
+
+// Drag
+let isDragging = false;
+let dragStartX = 0, dragStartY = 0;
+let dragCamStartX = 0, dragCamStartY = 0;
+
+canvas.addEventListener('mousedown', e => {
+    isDragging = true;
+    document.body.classList.add('dragging');
+    dragStartX = e.clientX;
+    dragStartY = e.clientY;
+    dragCamStartX = camX;
+    dragCamStartY = camY;
+});
+canvas.addEventListener('mousemove', e => {
+    if (!isDragging) return;
+    camX = dragCamStartX + (e.clientX - dragStartX) / zoom;
+    camY = dragCamStartY + (e.clientY - dragStartY) / zoom;
+    camTargetX = camX;
+    camTargetY = camY;
+});
+canvas.addEventListener('mouseup', () => { isDragging = false; document.body.classList.remove('dragging'); });
+canvas.addEventListener('mouseleave', () => { isDragging = false; document.body.classList.remove('dragging'); });
+canvas.addEventListener('wheel', e => {
+    e.preventDefault();
+    const delta = e.deltaY > 0 ? 0.9 : 1.1;
+    targetZoom = Math.max(0.3, Math.min(3, targetZoom * delta));
+}, { passive: false });
+
+// ============================================================
+// HEX NEIGHBORS
+// ============================================================
+const directions = [
+    { q: 1, r: 0 }, { q: 1, r: -1 }, { q: 0, r: -1 },
+    { q: -1, r: 0 }, { q: -1, r: 1 }, { q: 0, r: 1 }
+];
+
+function getNeighbors(hex) {
+    const result = [];
+    for (const d of directions) {
+        const n = hexes[hexKey(hex.q + d.q, hex.r + d.r)];
+        if (n) result.push(n);
+    }
+    return result;
+}
+
+// ============================================================
+// INFECTION SPREAD SIMULATION
+// ============================================================
+function simulateTick() {
+    const cureSlowdown = cureProgress >= 100 ? 0.05 : 1;
+
+    for (const hex of hexList) {
+        if (hex.infected <= 0) continue;
+
+        const healthy = hex.population - hex.infected - hex.dead;
+
+        // Internal spread
+        if (healthy > 0) {
+            const newInfected = Math.min(healthy, hex.infectionRate * healthy * 0.01 * cureSlowdown);
+            hex.infected += newInfected;
+        }
+
+        // Deaths
+        const infectionPct = hex.infected / hex.population;
+        if (infectionPct > 0.5) {
+            const newDead = hex.infected * 0.002;
+            hex.dead += newDead;
+            hex.infected -= newDead;
+        }
+
+        // External spread to neighbors
+        const neighbors = getNeighbors(hex);
+        for (const n of neighbors) {
+            if (n.infected > 0 && n.wasInfected) continue;
+            const spreadChance = (hex.infected / hex.population) * 0.15 * cureSlowdown;
+            if (Math.random() < spreadChance) {
+                if (n.infected === 0) {
+                    n.infected = 1;
+                    n.wasInfected = true;
+                    n.pulseTime = gameTime;
+
+                    // Spawn particle
+                    if (Math.random() < 0.5) {
+                        spawnParticle(hex, n);
+                    }
+
+                    // Trigger news for cities
+                    if (n.isCity) {
+                        newsMessages.push(n.cityName + " REPORTS FIRST INFECTION CASES");
+                    }
+                }
+            }
+        }
+    }
+
+    // Transport route infection
+    for (const route of routes) {
+        const fromHex = hexes[hexKey(route.from.q, route.from.r)];
+        const toHex = hexes[hexKey(route.to.q, route.to.r)];
+        if (!fromHex || !toHex) continue;
+
+        if (fromHex.infected > 0 && (fromHex.infected / fromHex.population) > 0.1) {
+            if (toHex.infected === 0 && Math.random() < 0.08 * cureSlowdown) {
+                toHex.infected = 1;
+                toHex.wasInfected = true;
+                toHex.pulseTime = gameTime;
+                spawnTraveler(route);
+                if (toHex.isCity) {
+                    newsMessages.push("INFECTION ARRIVES IN " + toHex.cityName + " VIA " + route.type.toUpperCase() + " ROUTE");
+                }
+            } else if (Math.random() < 0.02) {
+                spawnTraveler(route);
+            }
+        }
+    }
+
+    // Cure progress
+    const totalInfected = hexList.reduce((s, h) => s + h.infected, 0);
+    if (totalInfected > 100) {
+        cureProgress = Math.min(100, cureProgress + 0.15 + Math.random() * 0.1);
+    }
+
+    // Day counter
+    day += 0.5;
+
+    // Auto-pan toward infection front
+    if (!isDragging) {
+        let fx = 0, fy = 0, count = 0;
+        for (const hex of hexList) {
+            const pct = hex.infected / hex.population;
+            if (pct > 0.01 && pct < 0.8) {
+                const p = hexToPixel(hex.q, hex.r);
+                fx += p.x;
+                fy += p.y;
+                count++;
+            }
+        }
+        if (count > 0) {
+            camTargetX = -fx / count;
+            camTargetY = -fy / count;
+        }
+    }
+}
+
+// ============================================================
+// COLOR HELPERS
+// ============================================================
+function hexColor(hex) {
+    const total = hex.population;
+    const infPct = hex.infected / total;
+    const deadPct = hex.dead / total;
+    const totalAffected = (hex.infected + hex.dead) / total;
+
+    if (totalAffected < 0.001) return '#1a3a2a';
+    if (deadPct > 0.95) return '#1a0a0a';
+    if (totalAffected > 0.75) return '#5a0a0a';
+    if (totalAffected > 0.50) return '#8a1a1a';
+    if (totalAffected > 0.25) return '#8a5a0a';
+    if (totalAffected > 0.01) return '#4a6a1a';
+    return '#1a3a2a';
+}
+
+function hexBorderColor(hex) {
+    const totalAffected = (hex.infected + hex.dead) / hex.population;
+    if (totalAffected < 0.001) return '#2a5a3a';
+    if (totalAffected > 0.75) return '#3a0808';
+    if (totalAffected > 0.50) return '#6a1010';
+    if (totalAffected > 0.25) return '#6a3a08';
+    return '#3a5a1a';
+}
+
+function lerpColor(a, b, t) {
+    const ar = parseInt(a.slice(1, 3), 16), ag = parseInt(a.slice(3, 5), 16), ab = parseInt(a.slice(5, 7), 16);
+    const br = parseInt(b.slice(1, 3), 16), bg = parseInt(b.slice(3, 5), 16), bb = parseInt(b.slice(5, 7), 16);
+    const rr = Math.round(ar + (br - ar) * t);
+    const rg = Math.round(ag + (bg - ag) * t);
+    const rb = Math.round(ab + (bb - ab) * t);
+    return '#' + ((1 << 24) + (rr << 16) + (rg << 8) + rb).toString(16).slice(1);
+}
+
+// ============================================================
+// DRAWING
+// ============================================================
+function drawGrid() {
+    for (const hex of hexList) {
+        const p = hexToPixel(hex.q, hex.r);
+        const fill = hexColor(hex);
+        const border = hexBorderColor(hex);
+
+        drawHex(p.x, p.y, S - 1, fill, border, 0.5);
+
+        // City pulse effect
+        if (hex.isCity && hex.pulseTime > 0) {
+            const elapsed = gameTime - hex.pulseTime;
+            if (elapsed < 3000) {
+                const pulseAlpha = Math.max(0, 0.5 * Math.sin(elapsed * 0.008) * (1 - elapsed / 3000));
+                drawHex(p.x, p.y, S + 4, null, `rgba(255, 50, 50, ${pulseAlpha})`, 2);
+            }
+        }
+
+        // Skull for dead hexes
+        const deadPct = hex.dead / hex.population;
+        if (deadPct > 0.9) {
+            ctx.fillStyle = 'rgba(200, 30, 30, 0.4)';
+            ctx.font = '10px serif';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText('☠', p.x, p.y);
+        }
+
+        // City marker
+        if (hex.isCity) {
+            ctx.fillStyle = hex.infected > 0 ? 'rgba(255, 80, 80, 0.8)' : 'rgba(180, 220, 180, 0.7)';
+            ctx.beginPath();
+            ctx.arc(p.x, p.y - 4, 3, 0, Math.PI * 2);
+            ctx.fill();
+
+            ctx.fillStyle = hex.infected > 0 ? 'rgba(255, 100, 100, 0.9)' : 'rgba(150, 200, 150, 0.7)';
+            ctx.font = '7px Courier New';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'top';
+            ctx.fillText(hex.cityName, p.x, p.y + 6);
+        }
+    }
+}
+
+function drawRoutes() {
+    const dashOffset = gameTime * 0.03;
+
+    for (const route of routes) {
+        const fromPos = hexToPixel(route.from.q, route.from.r);
+        const toPos = hexToPixel(route.to.q, route.to.r);
+        const fromHex = hexes[hexKey(route.from.q, route.from.r)];
+        const isInfectedRoute = fromHex && fromHex.infected > 0;
+
+        ctx.save();
+        ctx.setLineDash([4, 6]);
+        ctx.lineDashOffset = -dashOffset;
+
+        if (route.type === 'air') {
+            ctx.strokeStyle = isInfectedRoute ? 'rgba(255, 80, 80, 0.25)' : 'rgba(255, 255, 255, 0.12)';
+        } else {
+            ctx.strokeStyle = isInfectedRoute ? 'rgba(255, 80, 80, 0.25)' : 'rgba(80, 130, 220, 0.15)';
+        }
+        ctx.lineWidth = 0.8;
+
+        // Draw curved route
+        const mx = (fromPos.x + toPos.x) / 2;
+        const my = (fromPos.y + toPos.y) / 2;
+        const dx = toPos.x - fromPos.x;
+        const dy = toPos.y - fromPos.y;
+        const cx = mx - dy * 0.15;
+        const cy = my + dx * 0.15;
+
+        ctx.beginPath();
+        ctx.moveTo(fromPos.x, fromPos.y);
+        ctx.quadraticCurveTo(cx, cy, toPos.x, toPos.y);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.restore();
+
+        // Icon along route
+        const t = ((gameTime * 0.0003) % 1);
+        const ix = (1 - t) * (1 - t) * fromPos.x + 2 * (1 - t) * t * cx + t * t * toPos.x;
+        const iy = (1 - t) * (1 - t) * fromPos.y + 2 * (1 - t) * t * cy + t * t * toPos.y;
+
+        ctx.font = '8px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillStyle = isInfectedRoute ? 'rgba(255, 80, 80, 0.6)' : 'rgba(200, 200, 200, 0.3)';
+        ctx.fillText(route.type === 'air' ? '✈' : '⚓', ix, iy);
+    }
+}
+
+function drawTravelers() {
+    for (let i = travelers.length - 1; i >= 0; i--) {
+        const t = travelers[i];
+        t.progress += t.speed;
+
+        if (t.progress >= 1) {
+            // Infect destination
+            const destHex = hexes[hexKey(t.route.to.q, t.route.to.r)];
+            if (destHex && destHex.infected === 0) {
+                destHex.infected = 1;
+                destHex.wasInfected = true;
+                destHex.pulseTime = gameTime;
+            }
+            travelers.splice(i, 1);
+            continue;
+        }
+
+        const fromPos = hexToPixel(t.route.from.q, t.route.from.r);
+        const toPos = hexToPixel(t.route.to.q, t.route.to.r);
+        const mx = (fromPos.x + toPos.x) / 2;
+        const my = (fromPos.y + toPos.y) / 2;
+        const dx = toPos.x - fromPos.x;
+        const dy = toPos.y - fromPos.y;
+        const cx = mx - dy * 0.15;
+        const cy = my + dx * 0.15;
+
+        const p = t.progress;
+        const x = (1 - p) * (1 - p) * fromPos.x + 2 * (1 - p) * p * cx + p * p * toPos.x;
+        const y = (1 - p) * (1 - p) * fromPos.y + 2 * (1 - p) * p * cy + p * p * toPos.y;
+
+        // Glowing red dot
+        ctx.beginPath();
+        ctx.arc(x, y, 3, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(255, 40, 40, 0.9)';
+        ctx.fill();
+
+        // Glow
+        const grad = ctx.createRadialGradient(x, y, 0, x, y, 8);
+        grad.addColorStop(0, 'rgba(255, 40, 40, 0.4)');
+        grad.addColorStop(1, 'rgba(255, 40, 40, 0)');
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.arc(x, y, 8, 0, Math.PI * 2);
+        ctx.fill();
+    }
+}
+
+function drawParticles() {
+    for (let i = particles.length - 1; i >= 0; i--) {
+        const p = particles[i];
+        p.progress += p.speed;
+
+        if (p.progress >= 1) {
+            particles.splice(i, 1);
+            continue;
+        }
+
+        const x = p.x + (p.tx - p.x) * p.progress;
+        const y = p.y + (p.ty - p.y) * p.progress;
+        const alpha = p.alpha * (1 - p.progress) * 0.6;
+
+        ctx.beginPath();
+        ctx.arc(x, y, p.size, 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(255, 60, 30, ${alpha})`;
+        ctx.fill();
+    }
+}
+
+// ============================================================
+// UI OVERLAY (screen space)
+// ============================================================
+function drawUI() {
+    ctx.save();
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    // Title bar background
+    const titleGrad = ctx.createLinearGradient(0, 0, 0, 50);
+    titleGrad.addColorStop(0, 'rgba(8, 8, 8, 0.95)');
+    titleGrad.addColorStop(1, 'rgba(8, 8, 8, 0)');
+    ctx.fillStyle = titleGrad;
+    ctx.fillRect(0, 0, W, 60);
+
+    // Title
+    ctx.fillStyle = '#cc2222';
+    ctx.font = 'bold 14px Courier New';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'top';
+    ctx.fillText('21 / HEX PLAGUE — SPREAD', 16, 12);
+
+    // Day counter & FPS (top right)
+    ctx.fillStyle = '#aa3333';
+    ctx.font = '12px Courier New';
+    ctx.textAlign = 'right';
+    ctx.fillText('DAY ' + Math.floor(day), W - 80, 12);
+    ctx.fillStyle = '#555';
+    ctx.font = '10px Courier New';
+    ctx.fillText(Math.round(fps) + ' FPS', W - 80, 28);
+
+    // News ticker
+    drawNewsTicker();
+
+    // Bottom stats panel
+    drawStatsPanel();
+
+    // Cure progress (right side)
+    drawCureBar();
+
+    // Scanlines (very subtle CRT)
+    drawScanlines();
+
+    // Vignette
+    drawVignette();
+
+    ctx.restore();
+}
+
+function drawNewsTicker() {
+    const tickerY = 36;
+    ctx.fillStyle = 'rgba(8, 8, 8, 0.85)';
+    ctx.fillRect(0, tickerY, W, 18);
+
+    ctx.strokeStyle = '#331111';
+    ctx.lineWidth = 0.5;
+    ctx.beginPath();
+    ctx.moveTo(0, tickerY);
+    ctx.lineTo(W, tickerY);
+    ctx.moveTo(0, tickerY + 18);
+    ctx.lineTo(W, tickerY + 18);
+    ctx.stroke();
+
+    const msg = '  ◆  ' + newsMessages[currentNewsIdx % newsMessages.length] + '  ◆  ' +
+                newsMessages[(currentNewsIdx + 1) % newsMessages.length] + '  ◆  ' +
+                newsMessages[(currentNewsIdx + 2) % newsMessages.length] + '  ◆  ';
+
+    ctx.font = '10px Courier New';
+    ctx.fillStyle = '#cc4444';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'top';
+
+    const textWidth = ctx.measureText(msg).width;
+    newsScrollX -= 0.8;
+    if (newsScrollX < -textWidth / 2) {
+        newsScrollX = 0;
+        currentNewsIdx = (currentNewsIdx + 1) % newsMessages.length;
+    }
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, tickerY, W, 18);
+    ctx.clip();
+    ctx.fillText(msg, newsScrollX, tickerY + 4);
+    ctx.fillText(msg, newsScrollX + textWidth, tickerY + 4);
+    ctx.restore();
+}
+
+function drawStatsPanel() {
+    const panelH = 60;
+    const panelY = H - panelH;
+
+    // Background
+    const grad = ctx.createLinearGradient(0, panelY, 0, H);
+    grad.addColorStop(0, 'rgba(8, 8, 8, 0)');
+    grad.addColorStop(0.3, 'rgba(8, 8, 8, 0.92)');
+    grad.addColorStop(1, 'rgba(8, 8, 8, 0.98)');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, panelY, W, panelH);
+
+    // Calculate totals
+    let totalPop = 0, totalInf = 0, totalDead = 0;
+    for (const h of hexList) {
+        totalPop += h.population;
+        totalInf += Math.floor(h.infected);
+        totalDead += Math.floor(h.dead);
+    }
+    const totalHealthy = totalPop - totalInf - totalDead;
+    const infPct = totalInf / totalPop;
+
+    const fmt = n => Math.floor(n).toLocaleString();
+
+    ctx.font = '11px Courier New';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'top';
+
+    const y1 = panelY + 14;
+    const y2 = panelY + 30;
+
+    // Labels
+    ctx.fillStyle = '#cc4444';
+    ctx.fillText('INFECTED: ', 20, y1);
+    ctx.fillStyle = '#ff6644';
+    ctx.fillText(fmt(totalInf), 110, y1);
+
+    ctx.fillStyle = '#883333';
+    ctx.fillText('DEAD: ', 230, y1);
+    ctx.fillStyle = '#cc3333';
+    ctx.fillText(fmt(totalDead), 290, y1);
+
+    ctx.fillStyle = '#337733';
+    ctx.fillText('HEALTHY: ', 400, y1);
+    ctx.fillStyle = '#55aa55';
+    ctx.fillText(fmt(totalHealthy), 490, y1);
+
+    // Infection bar
+    ctx.fillStyle = '#444';
+    ctx.fillText('INFECTION:', 20, y2);
+    const barX = 120;
+    const barW = 200;
+    const barH = 10;
+
+    ctx.fillStyle = '#1a1a1a';
+    ctx.fillRect(barX, y2 + 1, barW, barH);
+    ctx.strokeStyle = '#333';
+    ctx.lineWidth = 0.5;
+    ctx.strokeRect(barX, y2 + 1, barW, barH);
+
+    const infBarGrad = ctx.createLinearGradient(barX, 0, barX + barW * infPct, 0);
+    infBarGrad.addColorStop(0, '#884400');
+    infBarGrad.addColorStop(1, '#cc2200');
+    ctx.fillStyle = infBarGrad;
+    ctx.fillRect(barX, y2 + 1, barW * infPct, barH);
+
+    ctx.fillStyle = '#888';
+    ctx.fillText(Math.floor(infPct * 100) + '%', barX + barW + 8, y2);
+
+    // Cure bar inline
+    ctx.fillStyle = '#446688';
+    ctx.fillText('CURE:', 400, y2);
+    const cBarX = 460;
+
+    ctx.fillStyle = '#1a1a1a';
+    ctx.fillRect(cBarX, y2 + 1, barW, barH);
+    ctx.strokeStyle = '#333';
+    ctx.strokeRect(cBarX, y2 + 1, barW, barH);
+
+    ctx.fillStyle = '#2266bb';
+    ctx.fillRect(cBarX, y2 + 1, barW * (cureProgress / 100), barH);
+
+    ctx.fillStyle = '#6699cc';
+    ctx.fillText(Math.floor(cureProgress) + '%', cBarX + barW + 8, y2);
+}
+
+function drawCureBar() {
+    // Vertical cure bar on right side
+    const barW = 14;
+    const barH = 200;
+    const barX = W - 40;
+    const barY = (H - barH) / 2;
+
+    ctx.fillStyle = 'rgba(8, 8, 8, 0.7)';
+    ctx.fillRect(barX - 6, barY - 20, barW + 12, barH + 40);
+
+    ctx.font = '8px Courier New';
+    ctx.fillStyle = '#4488bb';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'bottom';
+    ctx.fillText('CURE', barX + barW / 2, barY - 6);
+
+    ctx.fillStyle = '#111';
+    ctx.fillRect(barX, barY, barW, barH);
+    ctx.strokeStyle = '#2a4a6a';
+    ctx.lineWidth = 0.5;
+    ctx.strokeRect(barX, barY, barW, barH);
+
+    const fillH = barH * (cureProgress / 100);
+    const cureGrad = ctx.createLinearGradient(0, barY + barH - fillH, 0, barY + barH);
+    cureGrad.addColorStop(0, '#2266bb');
+    cureGrad.addColorStop(1, '#1144aa');
+    ctx.fillStyle = cureGrad;
+    ctx.fillRect(barX, barY + barH - fillH, barW, fillH);
+
+    ctx.fillStyle = '#6699cc';
+    ctx.font = '9px Courier New';
+    ctx.textBaseline = 'top';
+    ctx.fillText(Math.floor(cureProgress) + '%', barX + barW / 2, barY + barH + 4);
+}
+
+function drawScanlines() {
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.02)';
+    for (let y = 0; y < H; y += 3) {
+        ctx.fillRect(0, y, W, 1);
+    }
+}
+
+function drawVignette() {
+    const grad = ctx.createRadialGradient(W / 2, H / 2, W * 0.25, W / 2, H / 2, W * 0.75);
+    grad.addColorStop(0, 'rgba(0, 0, 0, 0)');
+    grad.addColorStop(1, 'rgba(0, 0, 0, 0.5)');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, W, H);
+}
+
+// ============================================================
+// INFECTION ORIGIN INDICATOR
+// ============================================================
+function drawOriginPulse() {
+    if (!patient0) return;
+    const p = hexToPixel(patient0.q, patient0.r);
+    const pulse = Math.sin(gameTime * 0.003) * 0.3 + 0.3;
+
+    // Concentric rings
+    for (let i = 0; i < 3; i++) {
+        const r = S + 6 + i * 8 + Math.sin(gameTime * 0.002 + i) * 3;
+        const alpha = Math.max(0, pulse * (1 - i * 0.3)) * 0.3;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+        ctx.strokeStyle = `rgba(255, 40, 40, ${alpha})`;
+        ctx.lineWidth = 1;
+        ctx.stroke();
+    }
+}
+
+// ============================================================
+// MAIN LOOP
+// ============================================================
+let fps = 60;
+let frameCount = 0;
+let fpsTimer = 0;
+
+function update(timestamp) {
+    if (!lastTime) lastTime = timestamp;
+    const dt = timestamp - lastTime;
+    lastTime = timestamp;
+    gameTime += dt;
+
+    // FPS
+    frameCount++;
+    fpsTimer += dt;
+    if (fpsTimer >= 1000) {
+        fps = frameCount / (fpsTimer / 1000);
+        frameCount = 0;
+        fpsTimer = 0;
+    }
+
+    // Simulation ticks
+    tickTimer += dt;
+    while (tickTimer >= TICK_INTERVAL) {
+        tickTimer -= TICK_INTERVAL;
+        simulateTick();
+    }
+
+    // Smooth camera
+    if (!isDragging) {
+        camX += (camTargetX - camX) * 0.02;
+        camY += (camTargetY - camY) * 0.02;
+    }
+    zoom += (targetZoom - zoom) * 0.1;
+
+    // Spawn ambient particles from heavily infected hexes
+    if (Math.random() < 0.15) {
+        const candidates = hexList.filter(h => h.infected / h.population > 0.3 && h.infected / h.population < 0.9);
+        if (candidates.length > 0) {
+            const src = candidates[Math.floor(Math.random() * candidates.length)];
+            const neighbors = getNeighbors(src);
+            const uninf = neighbors.filter(n => n.infected / n.population < 0.3);
+            if (uninf.length > 0) {
+                spawnParticle(src, uninf[Math.floor(Math.random() * uninf.length)]);
+            }
+        }
+    }
+
+    // Clear
+    ctx.save();
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.fillStyle = '#080808';
+    ctx.fillRect(0, 0, W, H);
+    ctx.restore();
+
+    // World transform
+    ctx.save();
+    ctx.translate(W / 2 + camX * zoom, H / 2 + camY * zoom);
+    ctx.scale(zoom, zoom);
+
+    drawRoutes();
+    drawGrid();
+    drawOriginPulse();
+    drawTravelers();
+    drawParticles();
+
+    ctx.restore();
+
+    // UI overlay (screen space)
+    drawUI();
+
+    requestAnimationFrame(update);
+}
+
+requestAnimationFrame(update);
+</script>
+</body>
+</html>
