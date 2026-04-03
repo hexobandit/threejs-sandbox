@@ -7,3 +7,5 @@
 **Mockups:** hex strategy, flight combat, racing, Pacman, Bomberman, Tron, Prince of Persia, Starcraft, Soldat, Mini Motorways, Plague Inc, carrier battles, cyber warfare, canyon runs.
 
 **Playable games:** X-Wing shooter, Bomberman Hex, Prince of Persia 2050, Blocky Racer, Hexcom TD (3D + 2D), Carrier Battle command.
+
+<img width="750" height="435" alt="image" src="https://github.com/user-attachments/assets/3ce00c07-b2d8-4db6-9d09-6da333ad2365" />
